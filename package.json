@@ -1,0 +1,28 @@
+{
+  "name": "reed-solomon",
+  "version": "1.0.0",
+  "description": "Reed-Solomon erasure coding in pure Javascript",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jorangreef/reed-solomon.git"
+  },
+  "keywords": [
+    "reedsolomon",
+    "reed-solomon",
+    "erasure coding",
+    "replication",
+    "parity",
+    "redundancy",
+    "forward",
+    "error",
+    "correction"
+  ],
+  "author": "Joran Dirk Greef",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/jorangreef/reed-solomon/issues"
+  },
+  "homepage": "https://github.com/jorangreef/reed-solomon#readme",
+  "scripts": {}
+}
