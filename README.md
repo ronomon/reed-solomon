@@ -35,7 +35,7 @@ The Javascript binding will be used if the native binding has not been compiled.
 ```
 sudo npm install node-gyp -g
 ```
-Then build the binding from within the `reed-solumn` module directory:
+Then build the binding from within the `reed-solomon` module directory:
 ```
 cd node_modules/reed-solomon
 node-gyp rebuild
@@ -69,11 +69,11 @@ var size = shardSize; // The size of each shard within each buffer.
 rs.encode(shards, offset, size);
 // Parity shards now contain parity data.
 ```
-### Verifying Parity Shards
+#### Verifying Parity Shards
 ```
-rs.isParityCorrect(shards, offset, size);
+rs.isParityCorrect(shards, offset, size); // true/false
 ```
-### Decoding Corrupted Shards
+#### Decoding Corrupted Shards
 ```
 // Corrupt a data shard:
 shards[0] = new Buffer(shardSize);
@@ -98,8 +98,8 @@ rs.decode(shards, offset, size, present);
 ```
 
 ## Tests
-`reed-solomon` ships with extensive tests of the various components, including a long-running blackbox fuzz test.
+`reed-solomon` ships with extensive tests, including a long-running fuzz test.
 ```
 cd node-modules/reed-solomon
-npm test
+node test.js
 ```

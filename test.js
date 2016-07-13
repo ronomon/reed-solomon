@@ -294,9 +294,7 @@ Test.equal(4, ReedSolomon.Galois.exp(2, 2), 'Galois', 'exp(2, 2)');
 Test.equal(235, ReedSolomon.Galois.exp(5, 20), 'Galois', 'exp(5, 20)');
 Test.equal(43, ReedSolomon.Galois.exp(13, 7), 'Galois', 'exp(13, 7)');
 
-var random = (function() {
-	return Math.random();
-}());
+var random = Math.random.bind(Math);
 
 var generateShard = function(shardSize) {
   var buffer = new Buffer(shardSize);
@@ -532,8 +530,10 @@ var fuzz = function(maxShards, maxShardSize, binding) {
 };
 
 var bindings = [ReedSolomon.bindingJS];
+var bindingNames = ['Javascript'];
 if (ReedSolomon.bindingNative) {
   bindings.push(ReedSolomon.bindingNative);
+  bindingNames.push('Native');
 }
 bindings.forEach(
   function(binding) {
@@ -545,7 +545,7 @@ bindings.forEach(
     while (tests--) fuzz(32, 1024 * 1024, binding); // (maxShards, maxShardSize)
   }
 );
-
+console.log('Bindings Tested: ' + bindingNames.join(', '));
 console.log('================');
 console.log('ALL TESTS PASSED');
 console.log('================');

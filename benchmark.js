@@ -1,5 +1,4 @@
 var ReedSolomon = require('./index.js');
-var Node = { crypto: require('crypto') };
 
 // Create shards:
 var dataShards = 17;
