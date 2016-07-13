@@ -24,5 +24,11 @@
     "url": "https://github.com/jorangreef/reed-solomon/issues"
   },
   "homepage": "https://github.com/jorangreef/reed-solomon#readme",
-  "scripts": {}
+  "scripts": {
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "nan": "^2.0.0"
+  },
+  "gypfile": true
 }
