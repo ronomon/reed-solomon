@@ -31,7 +31,7 @@ Decode: 193.18 MB/s
 ```
 
 ## Optional Native Binding
-The Javascript binding will be used if the native binding has not been compiled. To compile the native binding, install [node-gyp](https://www.npmjs.com/package/node-gyp) globally:
+The native binding will be installed by default when installing `reed-solomon`, and the Javascript binding will be used if the native binding could not be compiled. To compile the native binding manually, install [node-gyp](https://www.npmjs.com/package/node-gyp) globally:
 ```
 sudo npm install node-gyp -g
 ```
