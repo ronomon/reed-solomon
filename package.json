@@ -25,11 +25,9 @@
   },
   "homepage": "https://github.com/jorangreef/reed-solomon#readme",
   "scripts": {
-    "install": " ",
     "test": "node test.js"
   },
   "dependencies": {
     "nan": "^2.0.0"
-  },
-  "gypfile": true
+  }
 }
