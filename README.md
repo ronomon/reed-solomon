@@ -13,11 +13,9 @@ npm install reed-solomon
 Data redundancy is typically achieved through mirroring or replication at a cost of 3x the original data. With Reed-Solomon erasure codes, you can achieve better redundancy at a cost of only 1.5x the original data, for example. Various storage efficiencies of 1.4x and 1.18x are also possible. You can trade storage efficiency, redundancy and recovery time by fine-tuning the number of data shards and parity shards you use.
 
 ## Performance
-`reed-solomon` includes a Javascript binding as well as an optional native binding (and simple benchmark):
+`reed-solomon` includes a Javascript binding as well as an optional native binding:
 ```
-ReedSolomon(17, 3)
-
-1,8 GHz Intel Core i5
+ReedSolomon(17, 3) [1,8 GHz Intel Core i5]:
 
 Binding: Native
 
@@ -30,8 +28,8 @@ Encode: 195.68 MB/s
 Decode: 193.18 MB/s
 ```
 
-## Optional Native Binding
-The native binding will be installed by default when installing `reed-solomon`, and the Javascript binding will be used if the native binding could not be compiled. To compile the native binding manually, install [node-gyp](https://www.npmjs.com/package/node-gyp) globally:
+## Native Binding (Optional)
+The native binding will be installed automatically when installing `reed-solomon`, and the Javascript binding will be used if the native binding could not be compiled. To compile the native binding manually, install [node-gyp](https://www.npmjs.com/package/node-gyp) globally:
 ```
 sudo npm install node-gyp -g
 ```
@@ -99,7 +97,14 @@ rs.decode(shards, offset, size, present);
 
 ## Tests
 `reed-solomon` ships with extensive tests, including a long-running fuzz test.
+
+To test the native and Javascript bindings:
 ```
-cd node-modules/reed-solomon
 node test.js
+```
+
+## Benchmark
+To benchmark the native and Javascript bindings:
+```
+node benchmark.js
 ```
