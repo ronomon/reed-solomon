@@ -25,6 +25,7 @@
   },
   "homepage": "https://github.com/jorangreef/reed-solomon#readme",
   "scripts": {
+    "install": "node-gyp rebuild; exit 0"
     "test": "node test.js"
   },
   "dependencies": {
