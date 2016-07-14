@@ -1,6 +1,6 @@
 {
   "name": "reed-solomon",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Reed-Solomon erasure coding in pure Javascript",
   "main": "index.js",
   "repository": {
