@@ -1,6 +1,6 @@
 {
   "name": "reed-solomon",
-  "version": "1.1.3",
+  "version": "1.1.2",
   "description": "Reed-Solomon erasure coding in pure Javascript",
   "main": "index.js",
   "repository": {
@@ -25,6 +25,7 @@
   },
   "homepage": "https://github.com/jorangreef/reed-solomon#readme",
   "scripts": {
+    "preinstall": "",
     "test": "node test.js"
   },
   "dependencies": {
