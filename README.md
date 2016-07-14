@@ -5,8 +5,15 @@ Reed-Solomon erasure coding in pure Javascript. A Javascript port of the [JavaRe
 `reed-solomon` is licensed under the [MIT License](https://en.wikipedia.org/wiki/MIT_License), which means that you can use it in your own projects for free. You can even use it in commercial projects.
 
 ## Installation
+#### Linux, OS X
+This will compile the native binding automatically:
 ```
 npm install reed-solomon
+```
+#### Windows
+This will skip compiling the native binding automatically:
+```
+npm install --ignore-scripts reed-solomon
 ```
 
 ## Efficiency
@@ -29,7 +36,7 @@ Decode: 193.18 MB/s
 ```
 
 ## Native Binding (Optional)
-The native binding will be installed automatically when installing `reed-solomon`. The Javascript binding will be used if the native binding could not be compiled or is not available. To compile the native binding, install [node-gyp](https://www.npmjs.com/package/node-gyp) globally:
+The native binding will be installed automatically when installing `reed-solomon` without the `--ignore-scripts` argument. The Javascript binding will be used if the native binding could not be compiled or is not available. To compile the native binding manually after installing `reed-solomon`, install [node-gyp](https://www.npmjs.com/package/node-gyp) globally:
 ```
 sudo npm install node-gyp -g
 ```
