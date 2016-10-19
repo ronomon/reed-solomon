@@ -90,12 +90,14 @@ cd node_modules/reed-solomon
 node-gyp rebuild
 ```
 
-#### Encoding
+#### Encoding Parity Shards
 ```
 var ReedSolomon = require('reed-solomon');
 
+// Specify the number of data shards (<=31):
 var dataShards = 6;
-var parityShards = 3; // Resilient against loss of up to any 3 shards.
+// Specify the number of parity shards (<=31):
+var parityShards = 3; // Protect against loss of any 3 data or parity shards.
 var totalShards = dataShards + parityShards;
 
 // Specify the total length of each shard in bytes:
@@ -139,7 +141,7 @@ var shardSize = shardLength - shardOffset;
 // This can be used concurrently across many `encode()`/`decode()` calls.
 var rs = new ReedSolomon(dataShards, parityShards);
 
-// Create all parity shards:
+// Encode all parity shards:
 rs.encode(
   buffer,
   bufferOffset,
@@ -159,7 +161,7 @@ rs.encode(
 buffer[0] = 255;
 // Corrupt a parity shard:
 buffer[dataShards + parityShards - 1] = 255;
-// We still have enough parity to corrupt another shard if we wanted to.
+// We still have enough parity to corrupt another shard.
 
 // Specify each corrupted shard according to its index in the array:
 // If a corrupted shard is not specified, the result will be wrong.
