@@ -90,6 +90,7 @@ cd node_modules/reed-solomon
 node-gyp rebuild
 ```
 
+## Usage
 #### Encoding Parity Shards
 ```
 var ReedSolomon = require('reed-solomon');
