@@ -1,5 +1,7 @@
-var ReedSolomon = require('./index.js');
 var Node = { crypto: require('crypto') };
+var QueueStream = require('./queue-stream.js');
+var ReedSolomon = require('./index.js');
+
 var Test = {};
 
 Test.equal = function(value, expected, namespace, description) {
@@ -27,77 +29,86 @@ Test.pass = function(namespace, description, message) {
   console.log('PASS: ' + Test.message(namespace, description, message));
 };
 
-var rs = new ReedSolomon(2, 1);
-var shards = [
-  new Buffer(0),
-  new Buffer(0),
-  new Buffer(0)
-];
-rs.encode(shards, 0, 0);
-Test.equal(shards.length, 3, 'ReedSolomon', 'zero encode shards.length');
-Test.equal(shards[0].length, 0, 'ReedSolomon', 'zero encode shards[0].length');
-Test.equal(shards[1].length, 0, 'ReedSolomon', 'zero encode shards[1].length');
-Test.equal(shards[2].length, 0, 'ReedSolomon', 'zero encode shards[2].length');
-
-var rs = new ReedSolomon(5, 5);
-var shards = [
-  new Buffer([0, 1]),
-  new Buffer([4, 5]),
-  new Buffer([2, 3]),
-  new Buffer([6, 7]),
-  new Buffer([8, 9]),
-  new Buffer([0, 0]),
-  new Buffer([0, 0]),
-  new Buffer([0, 0]),
-  new Buffer([0, 0]),
-  new Buffer([0, 0])
-];
-rs.encode(shards, 0, 2);
-Test.equal(shards[0], new Buffer([0, 1]), 'ReedSolomon', 'shard 0');
-Test.equal(shards[1], new Buffer([4, 5]), 'ReedSolomon', 'shard 1');
-Test.equal(shards[2], new Buffer([2, 3]), 'ReedSolomon', 'shard 2');
-Test.equal(shards[3], new Buffer([6, 7]), 'ReedSolomon', 'shard 3');
-Test.equal(shards[4], new Buffer([8, 9]), 'ReedSolomon', 'shard 4');
-Test.equal(shards[5], new Buffer([12, 13]), 'ReedSolomon', 'shard 5');
-Test.equal(shards[6], new Buffer([10, 11]), 'ReedSolomon', 'shard 6');
-Test.equal(shards[7], new Buffer([14, 15]), 'ReedSolomon', 'shard 7');
-Test.equal(shards[8], new Buffer([90, 91]), 'ReedSolomon', 'shard 8');
-Test.equal(shards[9], new Buffer([94, 95]), 'ReedSolomon', 'shard 9');
-var temp = new Buffer([0, 0]);
-Test.equal(
-  rs.isParityCorrect(shards, 0, 2, temp),
-  true,
-  'ReedSolomon',
-  'isParityCorrect'
-);
-shards[8][0] += 1;
-Test.equal(
-  rs.isParityCorrect(shards, 0, 2, temp),
-  false,
-  'ReedSolomon',
-  'isParityCorrect'
-);
+function CheckParity(
+  dataShards,
+  parityShards,
+  buffer,
+  bufferOffset,
+  bufferSize,
+  shardLength,
+  shardOffset,
+  shardSize
+) {
+  var totalShards = dataShards + parityShards;
+  var matrix = ReedSolomon.matrix(dataShards, totalShards);
+  var matrixRows = [];
+  for (var index = 0; index < parityShards; index++) {
+    matrixRows.push(matrix.getRow(dataShards + index));
+  }
+  if (shardOffset + shardSize > shardLength) {
+    throw new Error('shard overflow');
+  }
+  var shards = [];
+  for (var index = 0; index < totalShards; index++) {
+    if (bufferOffset + shardLength > buffer.length) {
+      throw new Error('buffer overflow');
+    }
+    var shard = buffer.slice(bufferOffset, bufferOffset += shardLength);
+    shards.push(shard.slice(shardOffset, shardOffset + shardSize));
+  }
+  var sources = shards.slice(0, dataShards);
+  var targets = shards.slice(dataShards);
+  if (targets.length !== parityShards) {
+    throw new Error('targets.length !== parityShards');
+  }
+  var temp = Buffer.alloc(shardSize);
+  var table = ReedSolomon.Galois.TABLE;
+  var targetsLength = targets.length;
+  var sourcesLength = sources.length;
+  for (var targetsIndex = 0; targetsIndex < targetsLength; targetsIndex++) {
+    var target = targets[targetsIndex];
+    var matrixRow = matrixRows[targetsIndex];
+    for (var sourcesIndex = 0; sourcesIndex < sourcesLength; sourcesIndex++) {
+      var source = sources[sourcesIndex];
+      var tableOffset = matrixRow[sourcesIndex] * 256;
+      var tableRow = table.slice(tableOffset, tableOffset + 256);
+      if (sourcesIndex === 0) {
+        for (var index = 0; index < shardSize; index++) {
+          temp[index] = tableRow[source[index]];
+        }
+      } else {
+        for (var index = 0; index < shardSize; index++) {
+          temp[index] ^= tableRow[source[index]];
+        }
+      }
+    }
+    for (var index = 0; index < shardSize; index++) {
+      if (temp[index] != target[index]) return false;
+    }
+  }
+  return true;
+}
 
 var actual = ReedSolomon.Matrix.identity(3).toString();
 var expect = '[[1, 0, 0], [0, 1, 0], [0, 0, 1]]';
 Test.equal(actual, expect, 'Matrix', 'identity(3).toString()');
 
 var m1 = new ReedSolomon.Matrix([
-  new Buffer([1, 2]),
-  new Buffer([3, 4])
+  Buffer.from([1, 2]),
+  Buffer.from([3, 4])
 ]);
 var m2 = new ReedSolomon.Matrix([
-  new Buffer([5, 6]),
-  new Buffer([7, 8])
+  Buffer.from([5, 6]),
+  Buffer.from([7, 8])
 ]);
 var actual = m1.times(m2).toString();
 var expect = '[[11, 22], [19, 42]]';
 Test.equal(actual, expect, 'Matrix', 'times');
 
 var m = new ReedSolomon.Matrix([
-  new Buffer([56, 23, 98]),
-  new Buffer([3, 100, 200]),
-  new Buffer([45, 201, 123])
+  Buffer.from([56, 23, 98]),
+  Buffer.from([3, 100, 200]),
+  Buffer.from([45, 201, 123])
 ]);
 Test.equal(
   m.invert().toString(),
@@ -113,11 +124,11 @@ Test.equal(
 );
 
 var m = new ReedSolomon.Matrix([
-  new Buffer([1, 0, 0, 0, 0]),
-  new Buffer([0, 1, 0, 0, 0]),
-  new Buffer([0, 0, 0, 1, 0]),
-  new Buffer([0, 0, 0, 0, 1]),
-  new Buffer([7, 7, 6, 6, 1])
+  Buffer.from([1, 0, 0, 0, 0]),
+  Buffer.from([0, 1, 0, 0, 0]),
+  Buffer.from([0, 0, 0, 1, 0]),
+  Buffer.from([0, 0, 0, 0, 1]),
+  Buffer.from([7, 7, 6, 6, 1])
 ]);
 var expected = '[' + [
   '[1, 0, 0, 0, 0]',
@@ -161,180 +172,192 @@ function assertArrayEquals(a, b, namespace, name) {
   Test.equal(passed, true, namespace, name);
 }
 
-// Test associativity:
-for (var a = 0; a < 256; a++) {
-  for (var b = 0; b < 256; b++) {
-    for (var c = 0; c < 256; c++) {
-      assertEquals(
-        ReedSolomon.Galois.add(a, ReedSolomon.Galois.add(b, c)),
-        ReedSolomon.Galois.add(ReedSolomon.Galois.add(a, b), c),
-        'Galois',
-        'associativity',
-        2000000
-      );
-      assertEquals(
-        ReedSolomon.Galois.multiply(a, ReedSolomon.Galois.multiply(b, c)),
-        ReedSolomon.Galois.multiply(ReedSolomon.Galois.multiply(a, b), c),
-        'Galois',
-        'associativity',
-        2000000
-      );
-    }
-  }
-}
-
-// Test identity:
-for (var a = 0; a < 256; a++) {
-  assertEquals(a, ReedSolomon.Galois.add(a, 0), 'Galois', 'identity', 32);
-  assertEquals(a, ReedSolomon.Galois.multiply(a, 1), 'Galois', 'identity', 32);
-}
-
-// Test inverse:
-for (var a = 0; a < 256; a++) {
-  var b = ReedSolomon.Galois.subtract(0, a);
-  assertEquals(0, ReedSolomon.Galois.add(a, b), 'Galois', 'inverse', 64);
-  if (a !== 0) {
-    var b = ReedSolomon.Galois.divide(1, a);
-    assertEquals(1, ReedSolomon.Galois.multiply(a, b), 'Galois', 'inverse', 13);
-  }
-}
-
-// Test commutativity:
-for (var a = 0; a < 256; a++) {
-  for (var b = 0; b < 256; b++) {
-    assertEquals(
-      ReedSolomon.Galois.add(a, b),
-      ReedSolomon.Galois.add(b, a),
-      'Galois',
-      'commutativity',
-      8192
-    );
-    assertEquals(
-      ReedSolomon.Galois.multiply(a, b),
-      ReedSolomon.Galois.multiply(b, a),
-      'Galois',
-      'commutativity',
-      8192
-    );
-  }
-}
-
-// Test distributivity:
-for (var a = 0; a < 256; a++) {
-  for (var b = 0; b < 256; b++) {
-    for (var c = 0; c < 256; c++) {
-      assertEquals(
-        ReedSolomon.Galois.multiply(a, ReedSolomon.Galois.add(b, c)),
-        ReedSolomon.Galois.add(
-          ReedSolomon.Galois.multiply(a, b),
-          ReedSolomon.Galois.multiply(a, c)
-        ),
-        'Galois',
-        'distributivity',
-        2000000
-      );
-    }
-  }
-}
-
-// Test exp:
-for (var a = 0; a < 256; a++) {
-  var power = 1;
-  for (var j = 0; j < 256; j++) {
-    assertEquals(
-      power,
-      ReedSolomon.Galois.exp(a, j),
-      'Galois',
-      'exp',
-      4000
-    );
-    power = ReedSolomon.Galois.multiply(power, a);
-  }
-}
-
-// Test log table generation:
-var logTable = ReedSolomon.Galois.generateLogTable(
-  ReedSolomon.Galois.GENERATING_POLYNOMIAL
-);
-assertArrayEquals(
-  ReedSolomon.Galois.LOG_TABLE,
-  logTable,
-  'Galois',
-  'log table'
-);
-
-// Test exp table generation:
-var expTable = ReedSolomon.Galois.generateExpTable(logTable);
-assertArrayEquals(
-  ReedSolomon.Galois.EXP_TABLE,
-  expTable,
-  'Galois',
-  'exp table'
-);
-
-// Test multiply table:
-var table = ReedSolomon.Galois.MULTIPLY_TABLE;
-for (var a = 0; a < 256; a++) {
-  for (var b = 0; b < 256; b++) {
-    assertEquals(
-      ReedSolomon.Galois.multiply(a, b),
-      table[a & 0xFF][b & 0xFF],
-      'Galois',
-      'mtable',
-      4000
-    );
-  }
-}
+// // Test associativity:
+// for (var a = 0; a < 256; a++) {
+//   for (var b = 0; b < 256; b++) {
+//     for (var c = 0; c < 256; c++) {
+//       assertEquals(
+//         ReedSolomon.Galois.add(a, ReedSolomon.Galois.add(b, c)),
+//         ReedSolomon.Galois.add(ReedSolomon.Galois.add(a, b), c),
+//         'Galois',
+//         'associativity',
+//         2000000
+//       );
+//       assertEquals(
+//         ReedSolomon.Galois.multiply(a, ReedSolomon.Galois.multiply(b, c)),
+//         ReedSolomon.Galois.multiply(ReedSolomon.Galois.multiply(a, b), c),
+//         'Galois',
+//         'associativity',
+//         2000000
+//       );
+//     }
+//   }
+// }
+//
+// // Test identity:
+// for (var a = 0; a < 256; a++) {
+//   assertEquals(a, ReedSolomon.Galois.add(a, 0), 'Galois', 'identity', 32);
+//   assertEquals(a, ReedSolomon.Galois.multiply(a, 1), 'Galois', 'identity', 32);
+// }
+//
+// // Test inverse:
+// for (var a = 0; a < 256; a++) {
+//   var b = ReedSolomon.Galois.subtract(0, a);
+//   assertEquals(0, ReedSolomon.Galois.add(a, b), 'Galois', 'inverse', 64);
+//   if (a !== 0) {
+//     var b = ReedSolomon.Galois.divide(1, a);
+//     assertEquals(1, ReedSolomon.Galois.multiply(a, b), 'Galois', 'inverse', 13);
+//   }
+// }
+//
+// // Test commutativity:
+// for (var a = 0; a < 256; a++) {
+//   for (var b = 0; b < 256; b++) {
+//     assertEquals(
+//       ReedSolomon.Galois.add(a, b),
+//       ReedSolomon.Galois.add(b, a),
+//       'Galois',
+//       'commutativity',
+//       8192
+//     );
+//     assertEquals(
+//       ReedSolomon.Galois.multiply(a, b),
+//       ReedSolomon.Galois.multiply(b, a),
+//       'Galois',
+//       'commutativity',
+//       8192
+//     );
+//   }
+// }
+//
+// // Test distributivity:
+// for (var a = 0; a < 256; a++) {
+//   for (var b = 0; b < 256; b++) {
+//     for (var c = 0; c < 256; c++) {
+//       assertEquals(
+//         ReedSolomon.Galois.multiply(a, ReedSolomon.Galois.add(b, c)),
+//         ReedSolomon.Galois.add(
+//           ReedSolomon.Galois.multiply(a, b),
+//           ReedSolomon.Galois.multiply(a, c)
+//         ),
+//         'Galois',
+//         'distributivity',
+//         2000000
+//       );
+//     }
+//   }
+// }
+//
+// // Test exp:
+// for (var a = 0; a < 256; a++) {
+//   var power = 1;
+//   for (var j = 0; j < 256; j++) {
+//     assertEquals(
+//       power,
+//       ReedSolomon.Galois.exp(a, j),
+//       'Galois',
+//       'exp',
+//       4000
+//     );
+//     power = ReedSolomon.Galois.multiply(power, a);
+//   }
+// }
+//
+// // Test log table generation:
+// var logTable = ReedSolomon.Galois.generateLogTable(
+//   ReedSolomon.Galois.GENERATING_POLYNOMIAL
+// );
+// assertArrayEquals(
+//   ReedSolomon.Galois.LOG_TABLE,
+//   logTable,
+//   'Galois',
+//   'log table'
+// );
+//
+// // Test exp table generation:
+// var expTable = ReedSolomon.Galois.generateExpTable(logTable);
+// assertArrayEquals(
+//   ReedSolomon.Galois.EXP_TABLE,
+//   expTable,
+//   'Galois',
+//   'exp table'
+// );
+//
+// // Test multiply table:
+// var table = ReedSolomon.Galois.TABLE;
+// for (var a = 0; a < 256; a++) {
+//   for (var b = 0; b < 256; b++) {
+//     assertEquals(
+//       ReedSolomon.Galois.multiply(a, b),
+//       table[(a * 256) + b],
+//       'Galois',
+//       'table',
+//       4000
+//     );
+//   }
+// }
 
 // Test reference values:
 Test.equal(12, ReedSolomon.Galois.multiply(3, 4), 'Galois', 'multiply(3, 4)');
 Test.equal(21, ReedSolomon.Galois.multiply(7, 7), 'Galois', 'multiply(7, 7)');
-Test.equal(41, ReedSolomon.Galois.multiply(23, 45), 'Galois', 'multiply(23, 45)');
+Test.equal(
+  41,
+  ReedSolomon.Galois.multiply(23, 45),
+  'Galois',
+  'multiply(23, 45)'
+);
 Test.equal(4, ReedSolomon.Galois.exp(2, 2), 'Galois', 'exp(2, 2)');
 Test.equal(235, ReedSolomon.Galois.exp(5, 20), 'Galois', 'exp(5, 20)');
 Test.equal(43, ReedSolomon.Galois.exp(13, 7), 'Galois', 'exp(13, 7)');
 
 var random = Math.random.bind(Math);
 
-var generateShard = function(shardSize) {
-  var buffer = new Buffer(shardSize);
-  var length = shardSize;
-  if (random() < 0.05) {
-    while (length--) buffer[length] = 0;
-  } else if (random() < 0.05) {
-    while (length--) buffer[length] = 255;
-  } else {
-    while (length--) buffer[length] = Math.round(random() * 255);
-  }
-  return buffer;
+var sliceShard = function(buffer, bufferOffset, shardIndex, shardLength) {
+  var shardOffset = shardIndex * shardLength;
+  return buffer.slice(
+    bufferOffset + shardOffset,
+    bufferOffset + shardOffset + shardLength
+  );
 };
 
-var hashShard = function(buffer) {
-  var hash = Node.crypto.createHash('SHA256');
-  hash.update(buffer);
-  return hash.digest('hex').slice(0, 128 / 8 * 2); // Truncate hash to 128 bits.
-};
-
-var corruptShard = function(shard, offset, size) {
+var corruptShard = function(
+  buffer,
+  bufferOffset,
+  shardIndex,
+  shardLength,
+  shardOffset,
+  shardSize
+) {
+  var shard = sliceShard(buffer, bufferOffset, shardIndex, shardLength);
   var seen = {};
   var times = Math.min(
-    size,
+    shardSize,
     Math.max(
       1,
-      Math.round(random() * Math.min(10, size))
+      Math.round(random() * Math.min(10, shardSize))
     )
   );
   while (times) {
-    var position = Math.min(size - 1, Math.round(random() * size));
+    var position = Math.min(shardSize - 1, Math.round(random() * shardSize));
     if (seen.hasOwnProperty(position)) continue;
-    var source = shard[offset + position];
+    var source = shard[shardOffset + position];
     var target = (source + Math.floor(random() * 256)) & 255;
     if (target !== source) {
-      shard[offset + position] = target;
+      shard[shardOffset + position] = target;
       seen[position] = true;
       times--;
     }
   }
+};
+
+var generateShard = function(shardLength) {
+  return Buffer.alloc(shardLength, Math.floor(random() * 256));
+};
+
+var hashShard = function(buffer, bufferOffset, shardIndex, shardLength) {
+  var hash = Node.crypto.createHash('SHA256');
+  hash.update(sliceShard(buffer, bufferOffset, shardIndex, shardLength));
+  return hash.digest('hex').slice(0, 128 / 8 * 2); // Truncate hash to 128 bits.
 };
 
 var reinstantiateInstance = function(rs, dataShards, parityShards, binding) {
@@ -343,10 +366,10 @@ var reinstantiateInstance = function(rs, dataShards, parityShards, binding) {
   return new ReedSolomon(dataShards, parityShards, binding);
 };
 
-var fuzz = function(maxShards, maxShardSize, binding) {
+var fuzz = function(binding, parameters, end) {
   var minShards = 1;
-  var minShardSize = 1;
-  if (binding === ReedSolomon.bindingNative) {
+  var minShardLength = 0;
+  if (binding === ReedSolomon.binding.native) {
     var bindingType = 'Native';
   } else {
     var bindingType = 'Javascript';
@@ -355,7 +378,7 @@ var fuzz = function(maxShards, maxShardSize, binding) {
   // Generate Reed Solomon parameters:
   var totalShards = Math.max(
     minShards + 1,
-    Math.round(random() * maxShards)
+    Math.round(random() * parameters.maxShards)
   );
   var dataShards = Math.max(
     minShards,
@@ -369,183 +392,348 @@ var fuzz = function(maxShards, maxShardSize, binding) {
     'totalShards=' + totalShards
   );
   Test.equal(
-    dataShards >= 1,
+    dataShards >= 1 && dataShards <= 31,
     true,
     'ReedSolomon',
     'dataShards=' + dataShards
   );
   Test.equal(
-    parityShards >= 1,
+    parityShards >= 1 && dataShards <= 31,
     true,
     'ReedSolomon',
     'parityShards=' + parityShards
   );
   if (random() < 0.01) {
-    var shardSize = minShardSize;
+    var shardLength = minShardLength;
   } else {
-    var shardSize = Math.max(
-      minShardSize,
-      Math.round(random() * maxShardSize)
+    var shardLength = Math.max(
+      minShardLength,
+      Math.round(random() * parameters.maxShardLength)
     );
   }
   Test.equal(
-    shardSize >= minShardSize && shardSize <= maxShardSize,
+    shardLength >= minShardLength && shardLength <= parameters.maxShardLength,
+    true,
+    'ReedSolomon',
+    'shardLength=' + shardLength
+  );
+  if (random() < 0.5) {
+    var shardOffset = 0;
+  } else {
+    var shardOffset = Math.min(
+      Math.max(0, shardLength - 1),
+      Math.round(random() * shardLength)
+    );
+  }
+  Test.equal(
+    !(shardOffset < 0 || shardOffset > shardLength),
+    true,
+    'ReedSolomon',
+    'shardOffset=' + shardOffset
+  );
+  var remaining = shardLength - shardOffset;
+  if (random() < 0.2) {
+    var shardSize = remaining;
+  } else {
+    var shardSize = Math.min(remaining, Math.round(random() * remaining));
+  }
+  Test.equal(
+    !(shardSize < 0 || (shardOffset + shardSize) > shardLength),
     true,
     'ReedSolomon',
     'shardSize=' + shardSize
   );
-  if (random() < 0.2) {
-    var offset = 0;
-  } else {
-    var offset = Math.min(shardSize - 1, Math.round(random() * shardSize));
-  }
-  Test.equal(
-    offset >= 0 && offset < shardSize,
-    true,
-    'ReedSolomon',
-    'offset=' + offset
-  );
-  var remaining = shardSize - offset;
-  if (random() < 0.2) {
-    var size = remaining;
-  } else {
-    var size = Math.min(remaining, Math.round(random() * remaining));
-    if (size < 1) size = 1;
-  }
-  Test.equal(
-    size > 0 && offset + size <= shardSize,
-    true,
-    'ReedSolomon',
-    'size=' + size
-  );
   // Create data shards, initialize parity shards and hash data shards:
-  var shards = new Array(totalShards);
+  var bufferOffset = Math.floor(random() * shardLength * 2);
+  var bufferSize = totalShards * shardLength;
+  var bufferTail = Math.floor(random() * shardLength * 2);
+  var buffer = Buffer.alloc(bufferOffset + bufferSize + bufferTail);
+  Test.equal(
+    true,
+    true,
+    'ReedSolomon',
+    'bufferOffset=' + bufferOffset
+  );
+  Test.equal(
+    true,
+    true,
+    'ReedSolomon',
+    'bufferSize=' + bufferSize
+  );
   var hashes = new Array(totalShards);
   for (var index = 0; index < dataShards; index++) {
-    shards[index] = generateShard(shardSize); // Data shard.
-    hashes[index] = hashShard(shards[index]);
+     // Data shard:
+    var shard = generateShard(shardLength);
+    shard.copy(buffer, bufferOffset + (index * shardLength));
+    hashes[index] = hashShard(buffer, bufferOffset, index, shardLength);
   }
   for (var index = dataShards; index < totalShards; index++) {
-    shards[index] = generateShard(shardSize); // Parity shard.
+     // Parity shard:
+    var shard = generateShard(shardLength);
+    shard.copy(buffer, bufferOffset + (index * shardLength));
   }
   var rs = new ReedSolomon(dataShards, parityShards, binding);
   // Encode parity shards:
-  rs.encode(shards, offset, size);
-  // Check that shards were not corrupted by encode():
-  for (var index = 0; index < dataShards; index++) {
-    Test.equal(
-      hashShard(shards[index]),
-      hashes[index],
-      'ReedSolomon',
-      'shard ' + (index + 1) + '/' + totalShards + ' after encoding'
-    );
-  }
-  // Capture parity hashes:
-  for (var index = dataShards; index < totalShards; index++) {
-    hashes[index] = hashShard(shards[index]);
-  }
-  // Occasionally switch to a new instance:
-  rs = reinstantiateInstance(rs, dataShards, parityShards, binding);
-  // Check isParityCorrect() is working for valid shards:
-  var parityTemp = new Buffer(shardSize);
-  Test.equal(
-    rs.isParityCorrect(shards, offset, size, parityTemp),
-    true,
-    'ReedSolomon',
-    'isParityCorrect'
-  );
-  // Check that shards were not corrupted by isParityCorrect():
-  for (var index = 0; index < totalShards; index++) {
-    Test.equal(
-      hashShard(shards[index]),
-      hashes[index],
-      'ReedSolomon',
-      'shard ' + (index + 1) + '/' + totalShards + ' after checking parity'
-    );
-  }
-  // Decide how many shards to corrupt:
-  var corruptShardsCount = Math.max(1, Math.round(random() * parityShards));
-  Test.equal(
-    corruptShardsCount >= 1 && corruptShardsCount <= parityShards,
-    true,
-    'ReedSolomon',
-    'corruptShardsCount=' + corruptShardsCount
-  );
-  // Choose these shards randomly from data and parity shards:
-  var corruptShards = new Array(totalShards);
-  for (var index = 0; index < totalShards; index++) {
-    corruptShards[index] = index;
-  }
-  var order = {};
-  corruptShards.sort(
-    function(a, b) {
-      var key = a < b ? (a + '.' + b) : (b + '.' + a);
-      if (!order.hasOwnProperty(key)) {
-        order[key] = random() < 0.5 ? -1 : 1;
+  rs.encode(
+    buffer,
+    bufferOffset,
+    bufferSize,
+    shardLength,
+    shardOffset,
+    shardSize,
+    function(error) {
+      if (error) return end(error);
+      // Check that shards were not corrupted by encode():
+      for (var index = 0; index < dataShards; index++) {
+        Test.equal(
+          hashShard(buffer, bufferOffset, index, shardLength),
+          hashes[index],
+          'ReedSolomon',
+          'shard ' + (index + 1) + '/' + totalShards + ' after encoding'
+        );
       }
-      return order[key];
+      // Capture parity hashes:
+      for (var index = dataShards; index < totalShards; index++) {
+        hashes[index] = hashShard(buffer, bufferOffset, index, shardLength);
+        Test.equal(
+          hashes[index],
+          hashes[index],
+          'ReedSolomon',
+          'shard ' + (index + 1) + '/' + totalShards + ' after encoding'
+        );
+      }
+      // Check parity shards:
+      Test.equal(
+        CheckParity(
+          dataShards,
+          parityShards,
+          buffer,
+          bufferOffset,
+          bufferSize,
+          shardLength,
+          shardOffset,
+          shardSize
+        ),
+        true,
+        'ReedSolomon',
+        'parity correct'
+      );
+      // Check that shards were not corrupted by checking parity:
+      for (var index = 0; index < totalShards; index++) {
+        Test.equal(
+          hashShard(buffer, bufferOffset, index, shardLength),
+          hashes[index],
+          'ReedSolomon',
+          'shard ' + (index + 1) + '/' + totalShards + ' after checking parity'
+        );
+      }
+      // Occasionally switch to a new instance:
+      rs = reinstantiateInstance(rs, dataShards, parityShards, binding);
+      // Decide how many shards to corrupt:
+      if (shardSize === 0) {
+        var corruptShardsCount = 0;
+      } else {
+        var corruptShardsCount = Math.round(random() * parityShards);
+      }
+      Test.equal(
+        corruptShardsCount >= 0 && corruptShardsCount <= parityShards,
+        true,
+        'ReedSolomon',
+        'corruptShardsCount=' + corruptShardsCount
+      );
+      // Choose these shards randomly from data and parity shards:
+      var corruptShards = new Array(totalShards);
+      for (var index = 0; index < totalShards; index++) {
+        corruptShards[index] = index;
+      }
+      var order = {};
+      corruptShards.sort(
+        function(a, b) {
+          var key = a < b ? (a + '.' + b) : (b + '.' + a);
+          if (!order.hasOwnProperty(key)) {
+            order[key] = random() < 0.5 ? -1 : 1;
+          }
+          return order[key];
+        }
+      );
+      var corrupt = {};
+      for (var index = 0; index < corruptShardsCount; index++) {
+        corrupt[corruptShards[index]] = true;
+      }
+      // Corrupt shards and update targets:
+      var targets = 0;
+      for (var index = 0; index < totalShards; index++) {
+        if (corrupt.hasOwnProperty(index)) {
+          targets |= (1 << index);
+          corruptShard(
+            buffer,
+            bufferOffset,
+            index,
+            shardLength,
+            shardOffset,
+            shardSize
+          );
+        }
+      }
+      // Occasionally switch to a new instance:
+      rs = reinstantiateInstance(rs, dataShards, parityShards, binding);
+      // Check parity shards (should now be false):
+      Test.equal(
+        CheckParity(
+          dataShards,
+          parityShards,
+          buffer,
+          bufferOffset,
+          bufferSize,
+          shardLength,
+          shardOffset,
+          shardSize
+        ),
+        corruptShardsCount === 0,
+        'ReedSolomon',
+        'parity correct'
+      );
+      // Decode corrupted shards:
+      rs.decode(
+        buffer,
+        bufferOffset,
+        bufferSize,
+        shardLength,
+        shardOffset,
+        shardSize,
+        targets,
+        function(error) {
+          if (error) return end(error);
+          // Check that shards are all correct:
+          for (var index = 0; index < totalShards; index++) {
+            Test.equal(
+              hashShard(buffer, bufferOffset, index, shardLength),
+              hashes[index],
+              'ReedSolomon',
+              'shard ' + (index + 1) + '/' + totalShards + ' after decoding'
+            );
+          }
+          end();
+        }
+      );
     }
-  );
-  var corrupt = {};
-  for (var index = 0; index < corruptShardsCount; index++) {
-    corrupt[corruptShards[index]] = true;
-  }
-  // Corrupt shards and update present array:
-  var present = new Array(totalShards);
-  for (var index = 0; index < totalShards; index++) {
-    if (corrupt.hasOwnProperty(index)) {
-      present[index] = false;
-      corruptShard(shards[index], offset, size);
-    } else {
-      present[index] = true;
-    }
-  }
-  // Occasionally switch to a new instance:
-  rs = reinstantiateInstance(rs, dataShards, parityShards, binding);
-  // Check isParityCorrect() is working for corrupt shards:
-  Test.equal(
-    rs.isParityCorrect(shards, offset, size, parityTemp),
-    false,
-    'ReedSolomon',
-    'isParityCorrect'
-  );
-  // Decode corrupted shards:
-  rs.decode(shards, offset, size, present);
-  // Check that shards were not corrupted by isParityCorrect():
-  for (var index = 0; index < totalShards; index++) {
-    Test.equal(
-      hashShard(shards[index]),
-      hashes[index],
-      'ReedSolomon',
-      'shard ' + (index + 1) + '/' + totalShards + ' after decoding'
-    );
-  }
-  // Check isParityCorrect() is working for valid shards:
-  Test.equal(
-    rs.isParityCorrect(shards, offset, size, parityTemp),
-    true,
-    'ReedSolomon',
-    'isParityCorrect'
   );
 };
 
-var bindings = [ReedSolomon.bindingJS];
+var bindings = [ReedSolomon.binding.javascript];
 var bindingNames = ['Javascript'];
-if (ReedSolomon.bindingNative) {
-  bindings.push(ReedSolomon.bindingNative);
+
+if (ReedSolomon.binding.native) {
+  bindings.push(ReedSolomon.binding.native);
   bindingNames.push('Native');
 }
-bindings.forEach(
-  function(binding) {
-    // Do many small tests:
-    var tests = 100;
-    while (tests--) fuzz(256, 1024, binding); // (maxShards, maxShardSize)
-    // Do some large tests:
-    var tests = 10;
-    while (tests--) fuzz(32, 1024 * 1024, binding); // (maxShards, maxShardSize)
-  }
-);
-console.log('Bindings Tested: ' + bindingNames.join(', '));
-console.log('================');
-console.log('ALL TESTS PASSED');
-console.log('================');
+var queue = new QueueStream();
+queue.onData = function(binding, end) {
+  var queue = new QueueStream();
+  queue.onData = function(parameters, end) {
+    fuzz(binding, parameters, end);
+  };
+  queue.onEnd = function(error) {
+    if (error) return end(error);
+    // Fixed vector test:
+    Test.equal(
+      true,
+      true,
+      'ReedSolomon',
+      'fixed vector'
+    );
+    var dataShards = 5;
+    var parityShards = 5;
+    var rs = new ReedSolomon(dataShards, parityShards, binding);
+    var buffer = Buffer.concat([
+      Buffer.from([0, 1]),
+      Buffer.from([4, 5]),
+      Buffer.from([2, 3]),
+      Buffer.from([6, 7]),
+      Buffer.from([8, 9]),
+      Buffer.from([0, 0]),
+      Buffer.from([0, 0]),
+      Buffer.from([0, 0]),
+      Buffer.from([0, 0]),
+      Buffer.from([0, 0])
+    ]);
+    var bufferOffset = 0;
+    var bufferSize = buffer.length;
+    var shardLength = 2;
+    var shardOffset = 0;
+    var shardSize = shardLength;
+    rs.encode(
+      buffer,
+      bufferOffset,
+      bufferSize,
+      shardLength,
+      shardOffset,
+      shardSize,
+      function(error) {
+        if (error) return end(error);
+        function shard(index) {
+          var offset = index * 2;
+          return buffer.slice(offset, offset + 2);
+        }
+        Test.equal(shard(0), Buffer.from([0, 1]), 'ReedSolomon', 'shard 0');
+        Test.equal(shard(1), Buffer.from([4, 5]), 'ReedSolomon', 'shard 1');
+        Test.equal(shard(2), Buffer.from([2, 3]), 'ReedSolomon', 'shard 2');
+        Test.equal(shard(3), Buffer.from([6, 7]), 'ReedSolomon', 'shard 3');
+        Test.equal(shard(4), Buffer.from([8, 9]), 'ReedSolomon', 'shard 4');
+        Test.equal(shard(5), Buffer.from([12, 13]), 'ReedSolomon', 'shard 5');
+        Test.equal(shard(6), Buffer.from([10, 11]), 'ReedSolomon', 'shard 6');
+        Test.equal(shard(7), Buffer.from([14, 15]), 'ReedSolomon', 'shard 7');
+        Test.equal(shard(8), Buffer.from([90, 91]), 'ReedSolomon', 'shard 8');
+        Test.equal(shard(9), Buffer.from([94, 95]), 'ReedSolomon', 'shard 9');
+        Test.equal(
+          CheckParity(
+            dataShards,
+            parityShards,
+            buffer,
+            bufferOffset,
+            bufferSize,
+            shardLength,
+            shardOffset,
+            shardSize
+          ),
+          true,
+          'ReedSolomon',
+          'fixed vector parity correct'
+        );
+        buffer[0] = 255;
+        Test.equal(
+          CheckParity(
+            dataShards,
+            parityShards,
+            buffer,
+            bufferOffset,
+            bufferSize,
+            shardLength,
+            shardOffset,
+            shardSize
+          ),
+          false,
+          'ReedSolomon',
+          'fixed vector parity correct'
+        );
+        end();
+      }
+    );
+  };
+  // Do many small tests:
+  var tests = 1000;
+  while (tests--) queue.push({ maxShards: 31, maxShardLength: 32 });
+  // Do some large tests:
+  var tests = 100;
+  while (tests--) queue.push({ maxShards: 31, maxShardLength: 256 * 1024 });
+  queue.end();
+};
+queue.onEnd = function(error) {
+  if (error) throw error;
+  console.log('Bindings Tested: ' + bindingNames.join(', '));
+  console.log('================');
+  console.log('ALL TESTS PASSED');
+  console.log('================');
+};
+queue.push(bindings);
+queue.end();

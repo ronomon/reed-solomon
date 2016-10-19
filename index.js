@@ -17,372 +17,571 @@
 
 var ReedSolomon = function(dataShards, parityShards, binding) {
   var self = this;
-  self.binding = binding || ReedSolomon.bindingNative || ReedSolomon.bindingJS;
+  self.binding = (
+    binding || ReedSolomon.binding.native || ReedSolomon.binding.javascript
+  );
   self.dataShards = dataShards;
   self.parityShards = parityShards;
   self.totalShards = self.dataShards + self.parityShards;
-  if (self.totalShards > 256) {
+  if (typeof self.binding != 'object') {
+    throw new Error('binding must be provided');
+  }
+  if (typeof self.binding.encode != 'function') {
+    throw new Error('binding must have an encode method');
+  }
+  ReedSolomon.assertInteger('dataShards', self.dataShards);
+  ReedSolomon.assertInteger('parityShards', self.parityShards);
+  ReedSolomon.assertInteger('totalShards', self.totalShards);
+  if (self.dataShards === 0) throw new Error('dataShards must be > 0');
+  if (self.parityShards === 0) throw new Error('parityShards must be > 0');
+  if (self.totalShards === 0) throw new Error('totalShards must be > 0');
+  if (self.dataShards > 30) throw new Error('dataShards must be <= 30');
+  if (self.parityShards > 30) throw new Error('parityShards must be <= 30');
+  if (self.totalShards > 31) {
     // The Vandermonde matrix is guaranteed for 256 rows.
-    throw new Error('Data and parity shards must be at most 256 shards.');
+    // We use a 31-bit integer to represent sources and targets.
+    // This is more efficient in Javascript than a 32-bit integer or Array.
+    // After the 256 shard limit, this imposes a 31 shard limit.
+    // ReedSolomon on 20+ shards is slow and not to be encouraged.
+    throw new Error('dataShards + parityShards must be at most 31 shards');
   }
   self.matrix = ReedSolomon.matrix(self.dataShards, self.totalShards);
-  self.parityRows = new Array(self.parityShards);
+  self.parityRows = Buffer.alloc(self.dataShards * self.parityShards);
   for (var index = 0; index < self.parityShards; index++) {
-    self.parityRows[index] = self.matrix.getRow(self.dataShards + index);
+    var row = self.matrix.getRow(self.dataShards + index);
+    row.copy(self.parityRows, index * row.length);
   }
+  self.rowSize = self.dataShards;
 };
 
 // Checks the consistency of arguments passed to public methods.
-ReedSolomon.prototype.check = function(shards, offset, size) {
-  var self = this;
-  // The number of buffers should be equal to the number of
-  // data shards plus the number of parity shards.
-  if (shards.length != self.totalShards) {
-    throw new Error('Wrong number of shards: ' + shards.length);
-  }
-  // All of the shards should be buffers.
-  // All of the shards should be the same length.
-  var shardLength = shards[0].length;
-  for (var index = 0; index < shards.length; index++) {
-    var shard = shards[index];
-    if (!Buffer.isBuffer(shard)) throw new Error('Shards must all be buffers.');
-    if (shard.length != shardLength) {
-      throw new Error('Shards are different sizes.');
-    }
-  }
-  if (!ReedSolomon.integer(offset)) {
-    throw new Error('Argument offset must be a positive integer.');
-  }
-  if (!ReedSolomon.integer(size)) {
-    throw new Error('Argument size must be a positive integer.');
-  }
-  if (shardLength < offset + size) {
-    throw new Error('Overflow with offset=' + offset + ', size=' + size + '.');
-  }
-};
-
-// Multiplies a subset of rows from a coding matrix by a full set of
-// input shards to produce some output shards, and checks that the
-// the data in those shards matches what is expected.
-ReedSolomon.prototype.checkSomeShards = function(
-  matrixRows, sources, sourcesLength, targets, targetsLength, offset, size, temp
+ReedSolomon.prototype.checkArguments = function(
+  buffer,
+  bufferOffset,
+  bufferSize,
+  shardLength,
+  shardOffset,
+  shardSize,
+  targets,
+  end
 ) {
   var self = this;
-  var table = ReedSolomon.Galois.MULTIPLY_TABLE;
-  for (var targetsIndex = 0; targetsIndex < targetsLength; targetsIndex++) {
-    var target = targets[targetsIndex];
-    var matrixRow = matrixRows[targetsIndex];
-    for (var sourcesIndex = 0; sourcesIndex < sourcesLength; sourcesIndex++) {
-      var source = sources[sourcesIndex];
-      var multTableRow = table[matrixRow[sourcesIndex]];
-      if (sourcesIndex === 0) {
-        for (var index = offset; index < offset + size; index++) {
-          temp[index] = multTableRow[source[index]];
-        }
-      } else {
-        for (var index = offset; index < offset + size; index++) {
-          temp[index] ^= multTableRow[source[index]];
-        }
-      }
-    }
-    for (var index = offset; index < offset + size; index++) {
-      if (temp[index] != target[index]) return false;
-    }
+  if (!Buffer.isBuffer(buffer)) {
+    throw new Error('buffer must be a buffer');
   }
-  return true;
-};
-
-// Multiplies a subset of rows from a coding matrix by a full set of
-// input shards to produce some output shards.
-ReedSolomon.prototype.codeSomeShards = function(
-  matrixRows, sources, sourcesLength, targets, targetsLength, offset, size
-) {
-  var self = this;
-  var table = ReedSolomon.Galois.MULTIPLY_TABLE;
-  for (var targetsIndex = 0; targetsIndex < targetsLength; targetsIndex++) {
-    var target = targets[targetsIndex];
-    var matrixRow = matrixRows[targetsIndex];
-    self.binding.mset(
-      table[matrixRow[0]],
-      sources[0],
-      target,
-      offset,
-      offset + size
+  ReedSolomon.assertInteger('bufferOffset', bufferOffset);
+  ReedSolomon.assertInteger('bufferSize', bufferSize);
+  ReedSolomon.assertInteger(
+    'bufferOffset + bufferSize',
+    bufferOffset + bufferSize
+  );
+  ReedSolomon.assertInteger('shardLength', shardLength);
+  ReedSolomon.assertInteger('shardOffset', shardOffset);
+  ReedSolomon.assertInteger('shardSize', shardSize);
+  ReedSolomon.assertInteger(
+    'shardOffset + shardSize',
+    shardOffset + shardSize
+  );
+  ReedSolomon.assertBits('targets' + targets, targets);
+  if (typeof end != 'function') {
+    throw new Error('callback must be a function');
+  }
+  if (bufferOffset + bufferSize > buffer.length) {
+    throw new Error(
+      'bufferOffset=' + bufferOffset + ' + bufferSize=' + bufferSize +
+      ' > buffer.length=' + buffer.length
     );
-    for (var sourcesIndex = 1; sourcesIndex < sourcesLength; sourcesIndex++) {
-      self.binding.mxor(
-        table[matrixRow[sourcesIndex]],
-        sources[sourcesIndex],
-        target,
-        offset,
-        offset + size
-      );
-    }
   }
-};
-
-ReedSolomon.prototype.copy = function(src, srcPos, dst, dstPos, size) {
-  var self = this;
-  while (size--) dst[dstPos++] = src[srcPos++];
+  if (bufferSize !== (shardLength * self.totalShards)) {
+    throw new Error(
+      'bufferSize must be the product of shardLength and totalShards'
+    );
+  }
+  if (shardOffset + shardSize > shardLength) {
+    throw new Error(
+      'shardOffset=' + shardOffset + ' + shardSize=' + shardSize +
+      ' > shardLength=' + shardLength
+    );
+  }
+  if (ReedSolomon.indexMSB(targets) + 1 > self.totalShards) {
+    throw new Error('targets > totalShards');
+  }
+  if (ReedSolomon.countBits(targets) > self.parityShards) {
+    throw new Error('not enough shards present to recover data');
+  }
 };
 
 // Given a list of shards, some of which contain data, fills in the shards which
 // do not contain data. Returns quickly if all the shards are present.
-ReedSolomon.prototype.decode = function(shards, offset, size, present) {
+ReedSolomon.prototype.decode = function(
+  buffer,
+  bufferOffset,
+  bufferSize,
+  shardLength,
+  shardOffset,
+  shardSize,
+  targets,
+  end
+) {
   var self = this;
-  self.check(shards, offset, size);
-  // Are the shards all present? If so, there is nothing to be done further.
-  if (!present || present.constructor !== Array) {
-    throw new Error('Present argument should be an array.');
-  }
-  if (present.length !== self.totalShards) {
-    throw new Error('Present array should have the same length as shards.');
-  }
-  var numberPresent = 0;
-  for (var index = 0; index < self.totalShards; index++) {
-    if (typeof present[index] !== 'boolean') {
-      throw new Error('Present array elements should be booleans.');
-    }
-    if (present[index]) numberPresent += 1;
-  }
-  if (numberPresent == self.totalShards) return;
-  if (numberPresent < self.dataShards) {
-    // There is not enough redundant data to recover the missing data.
-    throw new Error('Not enough shards present to recover data.');
-  }
-  // Pull out the rows of the matrix that correspond to the shards that we have
-  // and build a square matrix.
-  var subMatrix = new ReedSolomon.Matrix(
-    self.dataShards,
-    self.dataShards
+  self.checkArguments(
+    buffer,
+    bufferOffset,
+    bufferSize,
+    shardLength,
+    shardOffset,
+    shardSize,
+    targets,
+    end
   );
-  // Pull out an array holding just the shards that correspond to the rows of
-  // the submatrix. These shards will be the input to the decoding process that
-  // recreates the missing data shards.
-  var subShards = new Array(self.dataShards);
-  var subMatrixRow = 0;
-  var matrixRow = 0;
-  while (matrixRow < self.totalShards && subMatrixRow < self.dataShards) {
-    if (present[matrixRow]) {
-      for (var column = 0; column < self.dataShards; column++) {
-        subMatrix.set(subMatrixRow, column, self.matrix.get(matrixRow, column));
+  if (targets === 0) return end();
+  function decodeDataShards() {
+    // If no data shards need to be decoded then we can move on:
+    var dataShardsMissing = 0;
+    for (var shardIndex = 0; shardIndex < self.dataShards; shardIndex++) {
+      if (targets & (1 << shardIndex)) dataShardsMissing++;
+    }
+    if (dataShardsMissing === 0) return decodeParityShards();
+    // Pull out the rows of the matrix that correspond to the shards that we
+    // have and build a square matrix:
+    var subMatrix = new ReedSolomon.Matrix(self.dataShards, self.dataShards);
+    // Pull out an array holding just the shards that correspond to the rows of
+    // the submatrix. These shards will be the input to the decoding process
+    // that recreates the missing data shards.
+    var dataSources = 0;
+    var count = 0;
+    var shardIndex = 0;
+    while (shardIndex < self.totalShards && count < self.dataShards) {
+      if (!(targets & (1 << shardIndex))) {
+        // Shard is present and does not need to be decoded.
+        dataSources |= (1 << shardIndex);
+        for (var column = 0; column < self.dataShards; column++) {
+          subMatrix.set(
+            count,
+            column,
+            self.matrix.get(shardIndex, column)
+          );
+        }
+        count++;
       }
-      subShards[subMatrixRow] = shards[matrixRow];
-      subMatrixRow += 1;
+      shardIndex++;
     }
-    matrixRow++;
-  }
-  // Invert the matrix, so that we can go from the encoded shards back to the
-  // original data. Then pull out the row that generates the shard that we want
-  // to decode. Note that since this matrix maps back to the orginal data, it
-  // can be used to create a data shard, but not a parity shard.
-  var dataDecodeMatrix = subMatrix.invert();
-  // Recreate any data shards that were missing. The inputs to the coding are
-  // the shards we actually have, and the outputs are the missing data shards.
-  // The computation is done using the special decode matrix we just built.
-  var outputs = new Array(self.parityShards);
-  var matrixRows = new Array(self.parityShards);
-  var outputCount = 0;
-  var shardsIndex = 0;
-  var shardsLength = self.dataShards;
-  while (shardsIndex < self.dataShards) {
-    if (!present[shardsIndex]) {
-      outputs[outputCount] = shards[shardsIndex];
-      matrixRows[outputCount] = dataDecodeMatrix.getRow(shardsIndex);
-      outputCount += 1;
+    // Invert the matrix, so that we can go from the encoded shards back to the
+    // original data. Then pull out the row that generates the shard that we
+    // want to decode. Note that since this matrix maps back to the orginal
+    // data, it can be used to create a data shard, but not a parity shard.
+    var dataMatrix = subMatrix.invert();
+    // Recreate any data shards that were missing. The inputs to the coding are
+    // the shards we actually have, and the outputs are the missing data shards.
+    // The computation is done using the special decode matrix we just built.
+    var rows = Buffer.alloc(dataShardsMissing * self.dataShards);
+    var rowsOffset = 0;
+    var dataTargets = 0;
+    for (var shardIndex = 0; shardIndex < self.dataShards; shardIndex++) {
+      if (targets & (1 << shardIndex)) {
+        // Shard is not present and needs to be decoded.
+        dataTargets |= (1 << shardIndex);
+        dataMatrix.getRow(shardIndex).copy(rows, rowsOffset);
+        rowsOffset += self.rowSize;
+      }
     }
-    shardsIndex++;
-  }
-  self.codeSomeShards(
-    matrixRows,
-    subShards,
-    self.dataShards,
-    outputs,
-    outputCount,
-    offset,
-    size
-  );
-  // Now that we have all of the data shards intact, we can compute any of the
-  // parity shards that are missing. The inputs to the coding are all of the
-  // data shards, including any that we have just calculated. The outputs are
-  // all the parity shards which were missing.
-  outputCount = 0;
-  var shardsIndex = self.dataShards;
-  var shardsLength = self.totalShards;
-  while (shardsIndex < self.totalShards) {
-    if (!present[shardsIndex]) {
-      outputs[outputCount] = shards[shardsIndex];
-      matrixRows[outputCount] = self.parityRows[shardsIndex - self.dataShards];
-      outputCount += 1;
+    if (ReedSolomon.countBits(dataTargets) > self.parityShards) {
+      throw new Error('dataTargets > parityShards');
     }
-    shardsIndex++;
+    self.binding.encode(
+      ReedSolomon.Galois.TABLE,
+      rows,
+      self.rowSize,
+      buffer,
+      bufferOffset,
+      bufferSize,
+      shardLength,
+      shardOffset,
+      shardSize,
+      dataSources,
+      dataTargets,
+      decodeParityShards
+    );
   }
-  self.codeSomeShards(
-    matrixRows,
-    shards,
-    self.dataShards,
-    outputs,
-    outputCount,
-    offset,
-    size
-  );
+  function decodeParityShards(error) {
+    if (error) return end(error);
+    // If no parity shards need to be decoded then we are done:
+    var parityShardsMissing = 0;
+    var shardIndex = self.dataShards;
+    while (shardIndex < self.totalShards) {
+      if (targets & (1 << shardIndex)) parityShardsMissing++;
+      shardIndex++;
+    }
+    if (parityShardsMissing === 0) return end();
+    // Now that we have all of the data shards intact, we can compute any of the
+    // parity shards that are missing. The inputs to the coding are all of the
+    // data shards, including any that we have just calculated. The outputs are
+    // all the parity shards which were missing.
+    var rows = Buffer.alloc(parityShardsMissing * self.dataShards);
+    var rowsOffset = 0;
+    var paritySources = Math.pow(2, self.dataShards) - 1;
+    var parityTargets = 0;
+    var shardIndex = self.dataShards;
+    while (shardIndex < self.totalShards) {
+      if (targets & (1 << shardIndex)) {
+        parityTargets |= (1 << shardIndex);
+        self.parityRows.copy(
+          rows,
+          rowsOffset,
+          (shardIndex - self.dataShards) * self.rowSize,
+          (shardIndex - self.dataShards + 1) * self.rowSize
+        );
+        rowsOffset += self.rowSize;
+      }
+      shardIndex++;
+    }
+    if (ReedSolomon.countBits(parityTargets) > self.parityShards) {
+      throw new Error('parityTargets > parityShards');
+    }
+    self.binding.encode(
+      ReedSolomon.Galois.TABLE,
+      rows,
+      self.rowSize,
+      buffer,
+      bufferOffset,
+      bufferSize,
+      shardLength,
+      shardOffset,
+      shardSize,
+      paritySources,
+      parityTargets,
+      end
+    );
+  }
+  decodeDataShards();
 };
 
 // Encodes the parity shards for a set of data shards.
-// All shards (including parity shards) must be initialized as buffers.
-// All shards must be the same size.
-// offset: The index of the first byte in each shard to encode.
-// size: The number of bytes to encode in each shard.
-ReedSolomon.prototype.encode = function(shards, offset, size) {
+ReedSolomon.prototype.encode = function(
+  buffer, bufferOffset, bufferSize, shardLength, shardOffset, shardSize, end
+) {
   var self = this;
-  self.check(shards, offset, size);
-  var outputs = new Array(self.parityShards);
-  self.copy(shards, self.dataShards, outputs, 0, self.parityShards);
-  self.codeSomeShards(
+  self.checkArguments(
+    buffer,
+    bufferOffset,
+    bufferSize,
+    shardLength,
+    shardOffset,
+    shardSize,
+    0,
+    end
+  );
+  // Use all data shards as sources:
+  var sources = Math.pow(2, self.dataShards) - 1;
+  // Use all parity shards as targets:
+  var targets = Math.pow(2, self.totalShards) - 1 - sources;
+  ReedSolomon.assertBits('sources', sources);
+  ReedSolomon.assertBits('targets', targets);
+  self.binding.encode(
+    ReedSolomon.Galois.TABLE,
     self.parityRows,
-    shards,
-    self.dataShards,
-    outputs,
-    self.parityShards,
-    offset,
-    size
+    self.rowSize,
+    buffer,
+    bufferOffset,
+    bufferSize,
+    shardLength,
+    shardOffset,
+    shardSize,
+    sources,
+    targets,
+    end
   );
 };
 
-// Returns true if the parity shards contain the right data.
-ReedSolomon.prototype.isParityCorrect = function(shards, offset, size, temp) {
-  var self = this;
-  self.check(shards, offset, size);
-  if (!temp) {
-    throw new Error('Temp buffer should be provided.');
+ReedSolomon.assertBits = function(key, value) {
+  ReedSolomon.assertInteger(key, value);
+  if (value > 2147483647) {
+    throw new Error(key + ' > 31 shards: ' + value);
   }
-  if (!Buffer.isBuffer(temp)) {
-    throw new Error('Temp buffer must be a Buffer.');
-  }
-  // Temp buffer must be at least the same size as shards.
-  if (temp.length < shards[0].length) {
-    throw new Error('Temp buffer is too small.');
-  }
-  var toCheck = new Array(self.parityShards);
-  self.copy(shards, self.dataShards, toCheck, 0, self.parityShards);
-  return self.checkSomeShards(
-    self.parityRows,
-    shards,
-    self.dataShards,
-    toCheck,
-    self.parityShards,
-    offset,
-    size,
-    temp
-  );
 };
 
-ReedSolomon.bindingJS = {
-  mset: function(mtable, source, target, offset, length) {
-    var blocks = Math.floor((length - offset) / 32);
-    while (blocks--) {
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
-      target[offset] = mtable[source[offset++]];
+ReedSolomon.assertBuffer = function(key, value) {
+  if (!Buffer.isBuffer(value)) {
+    throw new Error(key + ' must be a buffer');
+  }
+};
+
+ReedSolomon.assertInteger = function(key, value) {
+  if (typeof value != 'number') {
+    throw new Error(key + ' must be a number');
+  }
+  if (value < 0) {
+    throw new Error(key + ' must be positive: ' + value);
+  }
+  if (Math.floor(value) !== value) {
+    throw new Error(key + ' must be an integer: ' + value);
+  }
+  if (value > 4294967295) {
+    throw new Error(key + ' must be a 32-bit integer: ' + value);
+  }
+};
+
+ReedSolomon.binding = {};
+
+ReedSolomon.binding.javascript = {
+  checkArguments: function(
+    tables,
+    rows,
+    rowSize,
+    buffer,
+    bufferOffset,
+    bufferSize,
+    shardLength,
+    shardOffset,
+    shardSize,
+    sources,
+    targets,
+    end
+  ) {
+    ReedSolomon.assertBuffer('tables', tables);
+    ReedSolomon.assertBuffer('rows', rows);
+    ReedSolomon.assertInteger('rowSize', rowSize);
+    ReedSolomon.assertBuffer('buffer', buffer);
+    ReedSolomon.assertInteger('bufferOffset', bufferOffset);
+    ReedSolomon.assertInteger('bufferSize', bufferSize);
+    ReedSolomon.assertInteger('shardLength', shardLength);
+    ReedSolomon.assertInteger('shardOffset', shardOffset);
+    ReedSolomon.assertInteger('shardSize', shardSize);
+    ReedSolomon.assertBits('sources', sources);
+    ReedSolomon.assertBits('targets', targets);
+    if (typeof end != 'function') {
+      throw new Error('callback must be a function');
     }
-    while (offset < length) {
-      target[offset] = mtable[source[offset++]];
+    if (tables.length != 65536) {
+      throw new Error('tables length != 256 x 256');
+    }
+    if (bufferOffset + bufferSize > buffer.length) {
+      throw new Error('bufferOffset + bufferSize > buffer.length');
+    }
+    if (shardLength > 0 && (bufferSize % shardLength) !== 0) {
+      throw new Error('bufferSize must be a multiple of shardLength');
+    }
+    if (shardLength === 0 && bufferSize !== 0) {
+      throw new Error('shardLength === 0 && bufferSize !== 0');
+    }
+    if (shardOffset + shardSize > shardLength) {
+      throw new Error('shardOffset + shardSize > shardLength');
+    }
+    if (sources === 0) {
+      throw new Error('sources == 0 shards');
+    }
+    if (targets === 0) {
+      throw new Error('targets == 0 shards');
+    }
+    if (sources > 2147483647) {
+      throw new Error('sources > 31 shards');
+    }
+    if (targets > 2147483647) {
+      throw new Error('targets > 31 shards');
+    }
+    if ((sources & targets) !== 0) {
+      throw new Error('sources cannot be targets');
+    }
+    if (
+      (ReedSolomon.indexMSB(sources) * shardLength) + shardLength > bufferSize
+    ) {
+      throw new Error('buffer would overflow (too many sources)');
+    }
+    if (
+      (ReedSolomon.indexMSB(targets) * shardLength) + shardLength > bufferSize
+    ) {
+      throw new Error('buffer would overflow (too many targets)');
+    }
+    if (rows.length != ReedSolomon.countBits(targets) * rowSize) {
+      throw new Error('rows length != number of targets * rowSize');
+    }
+    if (rowSize != ReedSolomon.countBits(sources)) {
+      throw new Error('rowSize != number of sources');
     }
   },
-  mxor: function(mtable, source, target, offset, length) {
+
+  encode: function(
+    tables,
+    rows,
+    rowSize,
+    buffer,
+    bufferOffset,
+    bufferSize,
+    shardLength,
+    shardOffset,
+    shardSize,
+    sources,
+    targets,
+    end
+  ) {
+    var self = this;
+    self.checkArguments(
+      tables,
+      rows,
+      rowSize,
+      buffer,
+      bufferOffset,
+      bufferSize,
+      shardLength,
+      shardOffset,
+      shardSize,
+      sources,
+      targets,
+      end
+    );
+    var targetCount = 0;
+    for (var targetIndex = 0; targetIndex < 31; targetIndex++) {
+      if (targets & (1 << targetIndex)) {
+        var rowOffset = targetCount * rowSize;
+        var targetOffset = bufferOffset + (targetIndex * shardLength);
+        var target = buffer.slice(targetOffset, targetOffset + shardLength);
+        var sourceCount = 0;
+        for (var sourceIndex = 0; sourceIndex < 31; sourceIndex++) {
+          if (sources & (1 << sourceIndex)) {
+            var tablesOffset = rows[rowOffset + sourceCount] * 256;
+            var table = tables.slice(tablesOffset, tablesOffset + 256);
+            var sourceOffset = bufferOffset + (sourceIndex * shardLength);
+            var source = buffer.slice(sourceOffset, sourceOffset + shardLength);
+            if (sourceCount === 0) {
+              self.mset(
+                table,
+                source,
+                target,
+                shardOffset,
+                shardOffset + shardSize
+              );
+            } else {
+              self.mxor(
+                table,
+                source,
+                target,
+                shardOffset,
+                shardOffset + shardSize
+              );
+            }
+            sourceCount++;
+          }
+        }
+        targetCount++;
+      }
+    }
+    end();
+  },
+
+  mset: function(table, source, target, offset, length) {
     var blocks = Math.floor((length - offset) / 32);
     while (blocks--) {
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
-      target[offset] ^= mtable[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
+      target[offset] = table[source[offset++]];
     }
     while (offset < length) {
-      target[offset] ^= mtable[source[offset++]];
+      target[offset] = table[source[offset++]];
+    }
+  },
+
+  mxor: function(table, source, target, offset, length) {
+    var blocks = Math.floor((length - offset) / 32);
+    while (blocks--) {
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+      target[offset] ^= table[source[offset++]];
+    }
+    while (offset < length) {
+      target[offset] ^= table[source[offset++]];
     }
   }
 };
 
 try {
-  ReedSolomon.bindingNative = require('./build/Release/binding');
+  ReedSolomon.binding.native = require('./build/Release/binding.node');
 } catch (exception) {
   // We use the Javascript binding if the native binding has not been compiled.
-  ReedSolomon.bindingNative = undefined;
 }
 
-ReedSolomon.integer = function(value) {
-  if (typeof value != 'number') return false;
-  if (value < 0 || Math.floor(value) !== value) return false;
-  return true;
+ReedSolomon.countBits = function(bits) {
+  // Count the number of bits set.
+  ReedSolomon.assertBits('bits', bits);
+  for (var count = 0; bits; count++) {
+    bits &= bits - 1;
+  }
+  return count;
+};
+
+ReedSolomon.indexMSB = function(bits) {
+  // Find the index of the most significant bit.
+  ReedSolomon.assertBits('bits', bits);
+  var index = 31;
+  while (index--) {
+    if (bits & (1 << index)) return index;
+  }
+  return -1;
 };
 
 // Create the matrix to use for encoding, given the number of data shards and
 // the number of total shards. The top square of the matrix should be an
 // identity matrix, so that the data shards are unchanged after encoding.
 ReedSolomon.matrix = function(dataShards, totalShards) {
-  if (!ReedSolomon.integer(dataShards)) {
-    throw new Error('Argument dataShards must be a positive integer.');
-  }
-  if (!ReedSolomon.integer(totalShards)) {
-    throw new Error('Argument totalShards must be a positive integer.');
-  }
+  ReedSolomon.assertInteger('dataShards', dataShards);
+  ReedSolomon.assertInteger('totalShards', totalShards);
   // Start with a Vandermonde matrix. This matrix would work in theory, but does
   // not have the property that the data shards are unchanged after encoding.
   var vandermonde = ReedSolomon.vandermonde(totalShards, dataShards);
@@ -396,12 +595,8 @@ ReedSolomon.matrix = function(dataShards, totalShards) {
 // Create a Vandermonde matrix, which is guaranteed to have the property that
 // any subset of rows that forms a square matrix is invertible.
 ReedSolomon.vandermonde = function(rows, columns) {
-  if (!ReedSolomon.integer(rows)) {
-    throw new Error('Argument rows must be a positive integer.');
-  }
-  if (!ReedSolomon.integer(columns)) {
-    throw new Error('Argument columns must be a positive integer.');
-  }
+  ReedSolomon.assertInteger('rows', rows);
+  ReedSolomon.assertInteger('columns', columns);
   var result = new ReedSolomon.Matrix(rows, columns);
   for (var row = 0; row < rows; row++) {
     for (var column = 0; column < columns; column++) {
@@ -416,7 +611,7 @@ ReedSolomon.Galois = {};
 
 // Inverse of the logarithm table. Maps integer logarithms to members of the
 // field. There is no entry for 255 because the highest log is 254.
-ReedSolomon.Galois.EXP_TABLE = new Buffer([
+ReedSolomon.Galois.EXP_TABLE = Buffer.from([
     1,   2,   4,   8,  16,  32,  64, 128,
    29,  58, 116, 232, 205, 135,  19,  38,
    76, 152,  45,  90, 180, 117, 234, 201,
@@ -496,7 +691,7 @@ ReedSolomon.Galois.GENERATING_POLYNOMIAL = 29;
 
 // Map members of the Galois Field to their integer logarithms. The entry at
 // index 0 is never used because there is no log of 0.
-ReedSolomon.Galois.LOG_TABLE = new Buffer([
+ReedSolomon.Galois.LOG_TABLE = Buffer.from([
     0,   0,   1,  25,   2,  50,  26, 198,
     3, 223,  51, 238,  27, 104, 199,  75,
     4, 100, 224,  14,  52, 141, 239, 129,
@@ -539,7 +734,7 @@ ReedSolomon.Galois.add = function(a, b) {
 // Inverse of multiplication.
 ReedSolomon.Galois.divide = function(a, b) {
   if (a === 0) return 0;
-  if (b === 0) throw new Error('Divisor cannot be 0.');
+  if (b === 0) throw new Error('divisor cannot be 0');
   var logA = ReedSolomon.Galois.LOG_TABLE[a];
   var logB = ReedSolomon.Galois.LOG_TABLE[b];
   var logResult = logA - logB;
@@ -576,8 +771,7 @@ ReedSolomon.Galois.subtract = function(a, b) {
 
 // Generates the inverse log table.
 ReedSolomon.Galois.generateExpTable = function(logTable) {
-  var result = new Buffer(ReedSolomon.Galois.FIELD_SIZE * 2 - 2);
-  result.fill(0);
+  var result = Buffer.alloc(ReedSolomon.Galois.FIELD_SIZE * 2 - 2);
   for (var i = 1; i < ReedSolomon.Galois.FIELD_SIZE; i++) {
     var log = logTable[i];
     result[log] = i;
@@ -588,8 +782,7 @@ ReedSolomon.Galois.generateExpTable = function(logTable) {
 
 // Generates the logarithm table given a starting polynomial.
 ReedSolomon.Galois.generateLogTable = function(polynomial) {
-  var result = new Buffer(ReedSolomon.Galois.FIELD_SIZE);
-  result.fill(0);
+  var result = Buffer.alloc(ReedSolomon.Galois.FIELD_SIZE);
   var b = 1;
   for (var log = 0; log < ReedSolomon.Galois.FIELD_SIZE - 1; log++) {
     if (result[b] !== 0) {
@@ -605,21 +798,21 @@ ReedSolomon.Galois.generateLogTable = function(polynomial) {
 };
 
 // Generates the multiplication table.
-ReedSolomon.Galois.generateMultiplyTable = function() {
+ReedSolomon.Galois.generateMultiplicationTable = function() {
   var size = ReedSolomon.Galois.FIELD_SIZE;
-  var result = new Array(size);
+  var table = Buffer.alloc(size * size);
+  var offset = 0;
   for (var a = 0; a < size; a++) {
-    result[a] = new Buffer(size);
     for (var b = 0; b < size; b++) {
-      result[a][b] = ReedSolomon.Galois.multiply(a, b);
+      table[offset++] = ReedSolomon.Galois.multiply(a, b);
     }
   }
-  return result;
+  return table;
 };
 
 // A multiplication table for the Galois field. This table is an alternative to
 // using the multiply() method, which is implemented with log/exp table lookups.
-ReedSolomon.Galois.MULTIPLY_TABLE = ReedSolomon.Galois.generateMultiplyTable();
+ReedSolomon.Galois.TABLE = ReedSolomon.Galois.generateMultiplicationTable();
 
 // Matrix algebra over an 8-bit Galois field.
 // This class is not performance-critical, so the implementation is simple.
@@ -627,12 +820,8 @@ ReedSolomon.Matrix = function(initRows, initColumns) {
   var self = this;
   if (arguments.length === 2) {
     // Initialize a matrix of zeroes.
-    if (!ReedSolomon.integer(initRows)) {
-      throw new Error('Argument initRows must be a positive integer.');
-    }
-    if (!ReedSolomon.integer(initColumns)) {
-      throw new Error('Argument initColumns must be a positive integer.');
-    }
+    ReedSolomon.assertInteger('initRows', initRows);
+    ReedSolomon.assertInteger('initColumns', initColumns);
     self.rows = initRows;
     self.columns = initColumns;
     // The data in the matrix, in row major form.
@@ -640,28 +829,28 @@ ReedSolomon.Matrix = function(initRows, initColumns) {
     // The indices for both row and column start at 0.
     self.data = new Array(self.rows);
     for (var row = 0; row < self.rows; row++) {
-      self.data[row] = new Buffer(self.columns);
-      self.data[row].fill(0); // The matrix must be a matrix of zeroes.
+      // The matrix must be a matrix of zeroes.
+      self.data[row] = Buffer.alloc(self.columns);
     }
   } else {
     // Initialize a matrix with the given row-major data.
     var initData = arguments[0];
     if (!initData || initData.constructor !== Array) {
-      throw new Error('Argument initData must be an Array.');
+      throw new Error('initData must be an Array');
     }
     self.rows = initData.length;
     for (var row = 0; row < self.rows; row++) {
       if (!Buffer.isBuffer(initData[row])) {
-        throw new Error('All rows must be Buffers.');
+        throw new Error('all rows must be Buffers');
       }
     }
     self.columns = initData[0].length;
     self.data = new Array(self.rows);
     for (var row = 0; row < self.rows; row++) {
       if (initData[row].length != self.columns) {
-        throw new Error('All rows must have the same number of columns.');
+        throw new Error('all rows must have the same number of columns');
       }
-      self.data[row] = new Buffer(self.columns);
+      self.data[row] = Buffer.alloc(self.columns);
       for (var column = 0; column < self.columns; column++) {
         self.data[row][column] = initData[row][column];
       }
@@ -673,7 +862,7 @@ ReedSolomon.Matrix = function(initRows, initColumns) {
 ReedSolomon.Matrix.prototype.augment = function(right) {
   var self = this;
   if (self.rows != right.rows) {
-    throw new Error('Matrices do not have the same number of rows.');
+    throw new Error('matrices do not have the same number of rows');
   }
   var result = new ReedSolomon.Matrix(self.rows, self.columns + right.columns);
   for (var row = 0; row < self.rows; row++) {
@@ -705,7 +894,7 @@ ReedSolomon.Matrix.prototype.gaussianElimination = function() {
     }
     // If we could not find one, the matrix is singular.
     if (self.data[row][row] === 0) {
-      throw new Error('Matrix is singular.');
+      throw new Error('matrix is singular');
     }
     // Scale to 1.
     if (self.data[row][row] !== 1) {
@@ -750,11 +939,13 @@ ReedSolomon.Matrix.prototype.gaussianElimination = function() {
 // Returns the value at row r and column c.
 ReedSolomon.Matrix.prototype.get = function(row, column) {
   var self = this;
-  if (!ReedSolomon.integer(row) || self.rows <= row) {
-    throw new Error('Row index is out of range: ' + row);
+  ReedSolomon.assertInteger('row', row);
+  ReedSolomon.assertInteger('column', column);
+  if (self.rows <= row) {
+    throw new Error('row index is out of range: ' + row);
   }
-  if (!ReedSolomon.integer(column) || self.columns <= column) {
-    throw new Error('Column index is out of range: ' + column);
+  if (self.columns <= column) {
+    throw new Error('column index is out of range: ' + column);
   }
   return self.data[row][column];
 };
@@ -762,7 +953,7 @@ ReedSolomon.Matrix.prototype.get = function(row, column) {
 // Returns one row of the matrix as a buffer.
 ReedSolomon.Matrix.prototype.getRow = function(row) {
   var self = this;
-  var result = new Buffer(self.columns);
+  var result = Buffer.alloc(self.columns);
   for (var column = 0; column < self.columns; column++) {
     result[column] = self.get(row, column);
   }
@@ -773,7 +964,7 @@ ReedSolomon.Matrix.prototype.getRow = function(row) {
 ReedSolomon.Matrix.prototype.invert = function() {
   var self = this;
   if (self.rows != self.columns) {
-    throw new Error('Only square matrices can be inverted.');
+    throw new Error('only square matrices can be inverted');
   }
   // Create a working matrix by augmenting with an identity matrix on the right.
   var work = self.augment(ReedSolomon.Matrix.identity(self.rows));
@@ -786,11 +977,13 @@ ReedSolomon.Matrix.prototype.invert = function() {
 // Sets the value at row r, column c.
 ReedSolomon.Matrix.prototype.set = function(row, column, value) {
   var self = this;
-  if (!ReedSolomon.integer(row) || self.rows <= row) {
-    throw new Error('Row index is out of range: ' + row);
+  ReedSolomon.assertInteger('row', row);
+  ReedSolomon.assertInteger('column', column);
+  if (self.rows <= row) {
+    throw new Error('row index is out of range: ' + row);
   }
-  if (!ReedSolomon.integer(column) || self.columns <= column) {
-    throw new Error('Column index is out of range: ' + column);
+  if (self.columns <= column) {
+    throw new Error('column index is out of range: ' + column);
   }
   self.data[row][column] = value;
 };
@@ -810,11 +1003,13 @@ ReedSolomon.Matrix.prototype.submatrix = function(rmin, cmin, rmax, cmax) {
 // Exchanges two rows in the matrix.
 ReedSolomon.Matrix.prototype.swapRows = function(row1, row2) {
   var self = this;
-  if (!ReedSolomon.integer(row1) || row1 >= self.rows) {
-    throw new Error('Row index 1 is out of range.');
+  ReedSolomon.assertInteger('row1', row1);
+  ReedSolomon.assertInteger('row2', row2);
+  if (row1 >= self.rows) {
+    throw new Error('row index 1 is out of range');
   }
-  if (!ReedSolomon.integer(row2) || row2 >= self.rows) {
-    throw new Error('Row index 2 is out of range.');
+  if (row2 >= self.rows) {
+    throw new Error('row index 2 is out of range');
   }
   var temp = self.data[row1];
   self.data[row1] = self.data[row2];
@@ -875,3 +1070,5 @@ ReedSolomon.Matrix.identity = function(size) {
 };
 
 module.exports = ReedSolomon;
+
+// S.D.G.

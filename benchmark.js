@@ -1,84 +1,175 @@
+var ram = 268435456;
+var cpus = require('os').cpus();
+var cpu = cpus[0].model;
+var cores = cpus.length;
+// Using more cores increases throughput.
+// Using more than 1/2 available cores can increase latency.
+var concurrency = Math.max(2, Math.round(cores / 2));
+process['UV_THREADPOOL_SIZE'] = cores;
+
+var QueueStream = require('./queue-stream.js');
 var ReedSolomon = require('./index.js');
 
-// Create shards:
-var dataShards = 17;
-var parityShards = 3;
-var totalShards = dataShards + parityShards;
-var shardSize = (1024 * 1024 * 8);
-var now = Date.now();
-var shards = new Array(totalShards);
-for (var index = 0; index < totalShards; index++) {
-  if (index < dataShards) {
-    shards[index] = new Buffer(shardSize);
+var Execute = {};
+
+Execute.Encode = function(binding, vector, end) {
+  binding.encode(
+    vector.buffer,
+    vector.bufferOffset,
+    vector.bufferSize,
+    vector.shardLength,
+    vector.shardOffset,
+    vector.shardSize,
+    end
+  );
+};
+
+Execute.Decode = function(binding, vector, end) {
+  var targets = 0;
+  targets |= (1 << 0);
+  targets |= (1 << 1);
+  targets |= (1 << (totalShards - 1));
+  binding.decode(
+    vector.buffer,
+    vector.bufferOffset,
+    vector.bufferSize,
+    vector.shardLength,
+    vector.shardOffset,
+    vector.shardSize,
+    targets,
+    end
+  );
+};
+
+var dataShards = 10;
+var parityShards = 4;
+var totalShards = 14;
+var binding = {
+  'Javascript': new ReedSolomon(
+    dataShards,
+    parityShards,
+    ReedSolomon.binding.javascript
+  ),
+  'Native': new ReedSolomon(
+    dataShards,
+    parityShards,
+    ReedSolomon.binding.native
+  )
+};
+
+function benchmark(type, vectors, name, binding, end) {
+  if (name == 'Native') {
+    var queueConcurrency = concurrency;
   } else {
-    shards[index] = new Buffer(shardSize);
-    shards[index].fill(0);
+    var queueConcurrency = 1;
   }
+  var now = Date.now();
+  var sum = 0;
+  var time = 0;
+  var count = 0;
+  var queue = new QueueStream(queueConcurrency);
+  queue.onData = function(vector, end) {
+    var hrtime = process.hrtime();
+    Execute[type](binding, vector,
+      function(error) {
+        if (error) return end(error);
+        var difference = process.hrtime(hrtime);
+        var ns = (difference[0] * 1e9) + difference[1];
+        // Count the number of data bytes that can be processed per second:
+        sum += vector.shardLength * dataShards;
+        time += ns;
+        count++;
+        end();
+      }
+    );
+  };
+  queue.onEnd = function(error) {
+    if (error) return end(error);
+    var elapsed = Date.now() - now;
+    var latency = (time / count) / 1000000;
+    var throughput = sum / elapsed / 1000;
+    display([
+      name + ':',
+      'Latency:',
+      latency.toFixed(3) + 'ms',
+      'Throughput:',
+      throughput.toFixed(2) + ' MB/s'
+    ]);
+    // Rest between benchmarks to leave room for GC:
+    setTimeout(end, 100);
+  };
+  queue.push(vectors);
+  queue.end();
 }
 
-console.log('\nReedSolomon(' + dataShards + ', ' + parityShards + '):');
+function display(columns) {
+  var string = columns[0];
+  while (string.length < 15) string = ' ' + string;
+  string += ' ' + columns.slice(1).join(' ');
+  console.log(string);
+}
+
 console.log('');
+display([ 'CPU:', cpu ]);
+display([ 'Cores:', cores ]);
+display([ 'Threads:', concurrency ]);
 
-var bindings = [];
-if (ReedSolomon.bindingNative) bindings.push(ReedSolomon.bindingNative);
-bindings.push(ReedSolomon.bindingJS);
-
-bindings.forEach(
-  function(binding) {
-    if (binding === undefined) throw new Error('Binding not defined.');
-    if (binding === ReedSolomon.bindingNative) {
-      var bindingName = 'Native';
-    } else {
-      var bindingName = 'Javascript';
+var queue = new QueueStream();
+queue.onData = function(type, end) {
+  console.log('');
+  console.log('============================================================');
+  var queue = new QueueStream();
+  queue.onData = function(shardLength, end) {
+    var vectors = [];
+    var length = Math.min(10000, Math.round(ram / 2 / shardLength));
+    console.log('');
+    var parameters = [
+      'Data=' + dataShards,
+      'Parity=' + parityShards,
+      'Shard=' + shardLength
+    ];
+    display([
+      type + ':',
+      length + ' x (' + parameters.join(' ') + ')'
+    ]);
+    while (length--) {
+      vectors.push({
+        buffer: Buffer.alloc(totalShards * shardLength),
+        bufferOffset: 0,
+        bufferSize: totalShards * shardLength,
+        shardLength: shardLength,
+        shardOffset: 0,
+        shardSize: shardLength
+      });
     }
-    console.log('Binding: ' + bindingName);
-    console.log('');
-
-    var encodingResults = [];
-    var decodingResults = [];
-
-    // Benchmark several runs of encoding and decoding.
-    var times = 5;
-    while (times--) {
-      // Encode:
-      var now = Date.now();
-      var reedSolomon = new ReedSolomon(dataShards, parityShards, binding);
-      reedSolomon.encode(shards, 0, shardSize);
-      var elapsed = (Date.now() - now) / 1000;
-      var encoded = dataShards * shardSize / (1024* 1024);
-      var rate = 1 / elapsed * encoded;
-      encodingResults.push('Encode: ' + rate.toFixed(2) + ' MB/s');
-      // Decode:
-      var now = Date.now();
-      var reedSolomon = new ReedSolomon(dataShards, parityShards, binding);
-      var shardsPresent = new Array(totalShards);
-      var length = totalShards;
-      while (length--) shardsPresent[length] = true;
-      shards[0] = new Buffer(shardSize);
-      shardsPresent[0] = false;
-      shards[1] = new Buffer(shardSize);
-      shardsPresent[1] = false;
-      shards[totalShards - 1] = new Buffer(shardSize);
-      shardsPresent[totalShards - 1] = false;
-      reedSolomon.decode(shards, 0, shardSize, shardsPresent);
-      var elapsed = (Date.now() - now) / 1000;
-      var decoded = dataShards * shardSize / (1024* 1024);
-      var rate = 1 / elapsed * decoded;
-      decodingResults.push('Decode: ' + rate.toFixed(2) + ' MB/s');
-    }
-
-    // Group the encoding and decoding results:
-    encodingResults.forEach(
-      function(encodingResult) {
-        console.log(encodingResult);
-      }
-    );
-    console.log('');
-    decodingResults.forEach(
-      function(decodingResult) {
-        console.log(decodingResult);
-      }
-    );
-    console.log('');
-  }
-);
+    var queue = new QueueStream();
+    queue.onData = function(name, end) {
+      benchmark(type, vectors, name, binding[name], end);
+    };
+    queue.onEnd = end;
+    queue.push([
+      'Javascript',
+      'Native'
+    ]);
+    queue.end();
+  };
+  queue.onEnd = end;
+  queue.push([
+    256,
+    1024,
+    4096,
+    65536,
+    131072,
+    1048576
+  ]);
+  queue.end();
+};
+queue.onEnd = function(error) {
+  if (error) throw error;
+  console.log('');
+};
+queue.push([
+  'Encode',
+  'Decode'
+]);
+queue.end();
