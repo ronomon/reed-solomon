@@ -95,10 +95,13 @@ node-gyp rebuild
 ```
 var ReedSolomon = require('reed-solomon');
 
-// Specify the number of data shards (<=31):
+// Specify the number of data shards (<=30):
 var dataShards = 6;
-// Specify the number of parity shards (<=31):
+
+// Specify the number of parity shards (<=30):
 var parityShards = 3; // Protect against loss of any 3 data or parity shards.
+
+// The total number of shards must be at most 31:
 var totalShards = dataShards + parityShards;
 
 // Specify the total length of each shard in bytes:
