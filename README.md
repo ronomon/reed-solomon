@@ -5,11 +5,13 @@ Reed-Solomon erasure coding in pure Javascript with an optional C++ binding for 
 `reed-solomon` is licensed under the [MIT License](https://en.wikipedia.org/wiki/MIT_License), which means that you can use it in your own projects for free. You can even use it in commercial projects.
 
 ## Installation
+
 #### Linux, OS X
 This will compile the native binding automatically:
 ```
 npm install reed-solomon
 ```
+
 #### Windows
 This will skip compiling the native binding automatically:
 ```
@@ -91,6 +93,10 @@ node-gyp rebuild
 ```
 
 ## Usage
+
+#### Adjust threadpool size and control concurrency
+Please see the [`crypto-async`](https://github.com/jorangreef/crypto-async#adjust-threadpool-size-and-control-concurrency) module for advice on adjusting threadpool size and controlling concurrency.
+
 #### Encoding Parity Shards
 ```
 var ReedSolomon = require('reed-solomon');
@@ -159,6 +165,7 @@ rs.encode(
   }
 );
 ```
+
 #### Decoding Corrupted Shards
 ```
 // Corrupt a data shard:
