@@ -7,7 +7,7 @@ var cores = cpus.length;
 var concurrency = Math.max(2, Math.round(cores / 2));
 process['UV_THREADPOOL_SIZE'] = cores;
 
-var QueueStream = require('./queue-stream.js');
+var Queue = require('ronomon-queue');
 var ReedSolomon = require('./index.js');
 
 var Execute = {};
@@ -67,7 +67,7 @@ function benchmark(type, vectors, name, binding, end) {
   var sum = 0;
   var time = 0;
   var count = 0;
-  var queue = new QueueStream(queueConcurrency);
+  var queue = new Queue(queueConcurrency);
   queue.onData = function(vector, end) {
     var hrtime = process.hrtime();
     Execute[type](binding, vector,
@@ -114,11 +114,11 @@ display([ 'CPU:', cpu ]);
 display([ 'Cores:', cores ]);
 display([ 'Threads:', concurrency ]);
 
-var queue = new QueueStream();
+var queue = new Queue();
 queue.onData = function(type, end) {
   console.log('');
   console.log('============================================================');
-  var queue = new QueueStream();
+  var queue = new Queue();
   queue.onData = function(shardLength, end) {
     var vectors = [];
     var length = Math.min(10000, Math.round(ram / 2 / shardLength));
@@ -142,7 +142,7 @@ queue.onData = function(type, end) {
         shardSize: shardLength
       });
     }
-    var queue = new QueueStream();
+    var queue = new Queue();
     queue.onData = function(name, end) {
       benchmark(type, vectors, name, binding[name], end);
     };

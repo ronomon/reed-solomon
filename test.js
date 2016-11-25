@@ -1,5 +1,5 @@
 var Node = { crypto: require('crypto') };
-var QueueStream = require('./queue-stream.js');
+var Queue = require('ronomon-queue');
 var ReedSolomon = require('./index.js');
 
 var Test = {};
@@ -627,9 +627,9 @@ if (ReedSolomon.binding.native) {
   bindings.push(ReedSolomon.binding.native);
   bindingNames.push('Native');
 }
-var queue = new QueueStream();
+var queue = new Queue();
 queue.onData = function(binding, end) {
-  var queue = new QueueStream();
+  var queue = new Queue();
   queue.onData = function(parameters, end) {
     fuzz(binding, parameters, end);
   };
