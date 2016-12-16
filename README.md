@@ -98,7 +98,7 @@ node-gyp rebuild
 Please see the [`crypto-async`](https://github.com/jorangreef/crypto-async#adjust-threadpool-size-and-control-concurrency) module for advice on adjusting threadpool size and controlling concurrency.
 
 #### Encoding Parity Shards
-```
+```javascript
 var ReedSolomon = require('reed-solomon');
 
 // Specify the number of data shards (<=30):
@@ -167,7 +167,7 @@ rs.encode(
 ```
 
 #### Decoding Corrupted Shards
-```
+```javascript
 // Corrupt a data shard:
 buffer[0] = 255;
 // Corrupt a parity shard:
