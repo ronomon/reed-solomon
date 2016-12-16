@@ -168,13 +168,13 @@ rs.encode(
 
 #### Decoding Corrupted Shards
 ```javascript
-// Corrupt a data shard:
-buffer[0] = 255;
-// Corrupt a parity shard:
-buffer[dataShards + parityShards - 1] = 255;
+// Corrupt data shard at index 0:
+buffer[bufferOffset + (shardLength * 0) + shardOffset] = 255;
+// Corrupt parity shard at index 8:
+buffer[bufferOffset + (shardLength * 8) + shardOffset] = 255;
 // We still have enough parity to corrupt another shard.
 
-// Specify each corrupted shard according to its index in the array:
+// Specify every corrupted shard according to its index in the array:
 // If a corrupted shard is not specified, the result will be wrong.
 var targets = 0;
 targets |= (1 << 0); // Data shard at index 0 needs to be decoded.
