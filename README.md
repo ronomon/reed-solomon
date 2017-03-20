@@ -9,13 +9,13 @@ Reed-Solomon erasure coding in pure Javascript with an optional C++ binding for 
 #### Linux, OS X
 This will compile the native binding automatically:
 ```
-npm install reed-solomon
+npm install @ronomon/reed-solomon
 ```
 
 #### Windows
 This will skip compiling the native binding automatically:
 ```
-npm install --ignore-scripts reed-solomon
+npm install --ignore-scripts @ronomon/reed-solomon
 ```
 
 ## Efficiency
@@ -88,18 +88,18 @@ sudo npm install node-gyp -g
 ```
 Then build the binding from within the `reed-solomon` module directory:
 ```
-cd node_modules/reed-solomon
+cd node_modules/@ronomon/reed-solomon
 node-gyp rebuild
 ```
 
 ## Usage
 
 #### Adjust threadpool size and control concurrency
-Please see the [`crypto-async`](https://github.com/jorangreef/crypto-async#adjust-threadpool-size-and-control-concurrency) module for advice on adjusting threadpool size and controlling concurrency.
+Please see the [`crypto-async`](https://github.com/ronomon/crypto-async#adjust-threadpool-size-and-control-concurrency) module for advice on adjusting threadpool size and controlling concurrency.
 
 #### Encoding Parity Shards
 ```javascript
-var ReedSolomon = require('reed-solomon');
+var ReedSolomon = require('@ronomon/reed-solomon');
 
 // Specify the number of data shards (<=30):
 var dataShards = 6;

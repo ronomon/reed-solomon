@@ -7,7 +7,7 @@ var cores = cpus.length;
 var concurrency = Math.max(2, Math.round(cores / 2));
 process['UV_THREADPOOL_SIZE'] = cores;
 
-var Queue = require('ronomon-queue');
+var Queue = require('@ronomon/queue');
 var ReedSolomon = require('./index.js');
 
 var Execute = {};
@@ -98,7 +98,7 @@ function benchmark(type, vectors, name, binding, end) {
     // Rest between benchmarks to leave room for GC:
     setTimeout(end, 100);
   };
-  queue.push(vectors);
+  queue.concat(vectors);
   queue.end();
 }
 
@@ -147,14 +147,14 @@ queue.onData = function(type, end) {
       benchmark(type, vectors, name, binding[name], end);
     };
     queue.onEnd = end;
-    queue.push([
+    queue.concat([
       'Javascript',
       'Native'
     ]);
     queue.end();
   };
   queue.onEnd = end;
-  queue.push([
+  queue.concat([
     256,
     1024,
     4096,
@@ -168,7 +168,7 @@ queue.onEnd = function(error) {
   if (error) throw error;
   console.log('');
 };
-queue.push([
+queue.concat([
   'Encode',
   'Decode'
 ]);

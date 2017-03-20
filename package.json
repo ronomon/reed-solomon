@@ -1,11 +1,11 @@
 {
-  "name": "reed-solomon",
+  "name": "@ronomon/reed-solomon",
   "version": "3.1.1",
-  "description": "Reed-Solomon erasure coding in pure Javascript",
+  "description": "Reed-Solomon erasure coding in pure Javascript with an optional native binding",
   "main": "index.js",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jorangreef/reed-solomon.git"
+    "url": "git+https://github.com/ronomon/reed-solomon.git"
   },
   "keywords": [
     "reedsolomon",
@@ -21,14 +21,14 @@
   "author": "Joran Dirk Greef",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/jorangreef/reed-solomon/issues"
+    "url": "https://github.com/ronomon/reed-solomon/issues"
   },
-  "homepage": "https://github.com/jorangreef/reed-solomon#readme",
+  "homepage": "https://github.com/ronomon/reed-solomon#readme",
   "scripts": {
     "test": "node test.js"
   },
   "dependencies": {
-    "nan": "^2.0.0",
-    "ronomon-queue": "^0.1.1"
+    "@ronomon/queue": "^2.1.0",
+    "nan": "^2.0.0"
   }
 }

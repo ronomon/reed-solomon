@@ -1,5 +1,5 @@
 var Node = { crypto: require('crypto') };
-var Queue = require('ronomon-queue');
+var Queue = require('@ronomon/queue');
 var ReedSolomon = require('./index.js');
 
 var Test = {};
@@ -735,5 +735,5 @@ queue.onEnd = function(error) {
   console.log('ALL TESTS PASSED');
   console.log('================');
 };
-queue.push(bindings);
+queue.concat(bindings);
 queue.end();
