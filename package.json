@@ -1,6 +1,6 @@
 {
   "name": "@ronomon/reed-solomon",
-  "version": "3.1.1",
+  "version": "4.0.0",
   "description": "Reed-Solomon erasure coding in pure Javascript with an optional native binding",
   "main": "index.js",
   "repository": {
