@@ -552,7 +552,7 @@ ReedSolomon.binding.javascript = {
 };
 
 try {
-  ReedSolomon.binding.native = require('./build/Release/binding.node');
+  ReedSolomon.binding.native = require('./binding.node');
 } catch (exception) {
   // We use the Javascript binding if the native binding has not been compiled.
 }
