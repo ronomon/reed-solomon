@@ -25,6 +25,7 @@
   },
   "homepage": "https://github.com/ronomon/reed-solomon#readme",
   "scripts": {
+    "postinstall": "node-gyp clean",
     "test": "node test.js"
   },
   "dependencies": {
