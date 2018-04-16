@@ -1,7 +1,7 @@
 # reed-solomon
 Fast, reliable Reed-Solomon erasure coding as a native addon for Node.js.
 
-For an introduction to erasure coding, see the post by Brian Beach on the [Backblaze blog](https://www.backblaze.com/blog/reed-solomon/).
+For a good introduction to erasure coding, see this post by Brian Beach on the [Backblaze blog](https://www.backblaze.com/blog/reed-solomon/).
 
 ## License
 `reed-solomon` is licensed under the [MIT License](https://en.wikipedia.org/wiki/MIT_License).
