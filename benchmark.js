@@ -1,175 +1,150 @@
-var ram = 268435456;
-var cpus = require('os').cpus();
-var cpu = cpus[0].model;
-var cores = cpus.length;
-// Using more cores increases throughput.
-// Using more than 1/2 available cores can increase latency.
-var concurrency = Math.max(2, Math.round(cores / 2));
-process['UV_THREADPOOL_SIZE'] = cores;
+var CPUS = require('os').cpus();
+var CPU = CPUS[0].model;
+var CORES = CPUS.length;
+process['UV_THREADPOOL_SIZE'] = CORES;
 
+var Node = { crypto: require('crypto'), process: process };
 var Queue = require('@ronomon/queue');
-var ReedSolomon = require('./index.js');
+var ReedSolomon = require('./binding.node');
 
-var Execute = {};
+var MAX_K = Math.min(20, ReedSolomon.MAX_K);
+var MAX_M = Math.min(4, ReedSolomon.MAX_M);
+var SAMPLES = 40;
+var SHARD_SIZES = [
+  4096,
+  8192,
+  16384,
+  32768,
+  65536,
+  131072,
+  262144
+];
+var THREADS = 1;
 
-Execute.Encode = function(binding, vector, end) {
-  binding.encode(
-    vector.buffer,
-    vector.bufferOffset,
-    vector.bufferSize,
-    vector.shardLength,
-    vector.shardOffset,
-    vector.shardSize,
-    end
-  );
-};
+function Display(columns) {
+  columns[0] = String(columns[0]).padStart(10, ' ');
+  columns[1] = String(columns[1]).padStart(10, ' ');
+  columns[2] = String(columns[2]).padStart(10, ' ');
+  columns[3] = String(columns[3]).padStart(10, ' ');
+  columns[4] = String(columns[4]).padStart(14, ' ');
+  console.log(columns.join(' | '));
+}
 
-Execute.Decode = function(binding, vector, end) {
-  var targets = 0;
-  targets |= (1 << 0);
-  targets |= (1 << 1);
-  targets |= (1 << (totalShards - 1));
-  binding.decode(
-    vector.buffer,
-    vector.bufferOffset,
-    vector.bufferSize,
-    vector.shardLength,
-    vector.shardOffset,
-    vector.shardSize,
-    targets,
-    end
-  );
-};
+function Divider() {
+  console.log(new Array(66 + 1).join('-'));
+}
 
-var dataShards = 10;
-var parityShards = 4;
-var totalShards = 14;
-var binding = {
-  'Javascript': new ReedSolomon(
-    dataShards,
-    parityShards,
-    ReedSolomon.binding.javascript
-  ),
-  'Native': new ReedSolomon(
-    dataShards,
-    parityShards,
-    ReedSolomon.binding.native
+var cipher = Node.crypto.createCipheriv(
+  'AES-256-CTR',
+  Buffer.alloc(32),
+  Buffer.alloc(16)
+);
+var buffer = cipher.update(
+  Buffer.alloc(
+    (
+      MAX_K * SHARD_SIZES[SHARD_SIZES.length - 1] +
+      MAX_M * SHARD_SIZES[SHARD_SIZES.length - 1]
+    ) * SAMPLES
   )
-};
+);
+cipher.final();
 
-function benchmark(type, vectors, name, binding, end) {
-  if (name == 'Native') {
-    var queueConcurrency = concurrency;
-  } else {
-    var queueConcurrency = 1;
+console.log('');
+console.log(('CPU | ').padStart(13, ' ') + CPU);
+console.log(('CORES | ').padStart(13, ' ') + CORES);
+console.log(('THREADS | ').padStart(13, ' ') + THREADS);
+console.log('');
+Divider();
+Display([
+  'DATA',
+  'PARITY',
+  'SHARD SIZE',
+  'LATENCY',
+  'THROUGHPUT'
+]);
+
+var queue = new Queue(1);
+queue.onData = function(args, end) {
+  var context = args.context;
+  var k = args.k;
+  var m = args.m;
+  var shardSize = args.shardSize;
+  if (shardSize === SHARD_SIZES[0]) Divider();
+  var sources = 0;
+  var targets = 0;
+  for (var i = 0; i < k + m; i++) {
+    if (i < k) {
+      sources |= (1 << i);
+    } else {
+      targets |= (1 << i);
+    }
   }
-  var now = Date.now();
-  var sum = 0;
-  var time = 0;
-  var count = 0;
-  var queue = new Queue(queueConcurrency);
-  queue.onData = function(vector, end) {
-    var hrtime = process.hrtime();
-    Execute[type](binding, vector,
-      function(error) {
-        if (error) return end(error);
-        var difference = process.hrtime(hrtime);
-        var ns = (difference[0] * 1e9) + difference[1];
-        // Count the number of data bytes that can be processed per second:
-        sum += vector.shardLength * dataShards;
-        time += ns;
-        count++;
-        end();
-      }
+  var bufferOffset = 0;
+  var samples = [];
+  var length = SAMPLES;
+  while (length--) {
+    samples.push({
+      sources: sources,
+      targets: targets,
+      buffer: buffer,
+      bufferOffset: bufferOffset,
+      bufferSize: shardSize * k,
+      parity: buffer,
+      parityOffset: bufferOffset += shardSize * k,
+      paritySize: shardSize * m
+    });
+  }
+  var queue = new Queue(THREADS);
+  queue.onData = function(sample, end) {
+    ReedSolomon.encode(
+      context,
+      sample.sources,
+      sample.targets,
+      sample.buffer,
+      sample.bufferOffset,
+      sample.bufferSize,
+      sample.parity,
+      sample.parityOffset,
+      sample.paritySize,
+      end
     );
   };
   queue.onEnd = function(error) {
     if (error) return end(error);
-    var elapsed = Date.now() - now;
-    var latency = (time / count) / 1000000;
-    var throughput = sum / elapsed / 1000;
-    display([
-      name + ':',
-      'Latency:',
+    var elapsed = Node.process.hrtime(hrtime);
+    var ms = (elapsed[0] / 1000) + (elapsed[1] / 1000000);
+    var latency = ms / samples.length;
+    var bytes = shardSize * k * samples.length;
+    var throughput = bytes / ms / 1000;
+    Display([
+      k,
+      m,
+      shardSize,
       latency.toFixed(3) + 'ms',
-      'Throughput:',
       throughput.toFixed(2) + ' MB/s'
     ]);
-    // Rest between benchmarks to leave room for GC:
-    setTimeout(end, 100);
+    end();
   };
-  queue.concat(vectors);
+  var hrtime = Node.process.hrtime();
+  queue.concat(samples);
   queue.end();
-}
-
-function display(columns) {
-  var string = columns[0];
-  while (string.length < 15) string = ' ' + string;
-  string += ' ' + columns.slice(1).join(' ');
-  console.log(string);
-}
-
-console.log('');
-display([ 'CPU:', cpu ]);
-display([ 'Cores:', cores ]);
-display([ 'Threads:', concurrency ]);
-
-var queue = new Queue();
-queue.onData = function(type, end) {
-  console.log('');
-  console.log('============================================================');
-  var queue = new Queue();
-  queue.onData = function(shardLength, end) {
-    var vectors = [];
-    var length = Math.min(10000, Math.round(ram / 2 / shardLength));
-    console.log('');
-    var parameters = [
-      'Data=' + dataShards,
-      'Parity=' + parityShards,
-      'Shard=' + shardLength
-    ];
-    display([
-      type + ':',
-      length + ' x (' + parameters.join(' ') + ')'
-    ]);
-    while (length--) {
-      vectors.push({
-        buffer: Buffer.alloc(totalShards * shardLength),
-        bufferOffset: 0,
-        bufferSize: totalShards * shardLength,
-        shardLength: shardLength,
-        shardOffset: 0,
-        shardSize: shardLength
+};
+queue.onEnd = function() {
+  Divider();
+};
+for (var k = 1; k <= MAX_K; k++) {
+  for (var m = 1; m <= MAX_M; m++) {
+    var context = ReedSolomon.create(k, m);
+    var shardSizesIndex = 0;
+    var shardSizesLength = SHARD_SIZES.length;
+    while (shardSizesIndex < shardSizesLength) {
+      queue.push({
+        context: context,
+        k: k,
+        m: m,
+        shardSize: SHARD_SIZES[shardSizesIndex++]
       });
     }
-    var queue = new Queue();
-    queue.onData = function(name, end) {
-      benchmark(type, vectors, name, binding[name], end);
-    };
-    queue.onEnd = end;
-    queue.concat([
-      'Javascript',
-      'Native'
-    ]);
-    queue.end();
-  };
-  queue.onEnd = end;
-  queue.concat([
-    256,
-    1024,
-    4096,
-    65536,
-    131072,
-    1048576
-  ]);
-  queue.end();
-};
-queue.onEnd = function(error) {
-  if (error) throw error;
-  console.log('');
-};
-queue.concat([
-  'Encode',
-  'Decode'
-]);
+  }
+}
 queue.end();

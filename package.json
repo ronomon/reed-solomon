@@ -1,8 +1,8 @@
 {
   "name": "@ronomon/reed-solomon",
   "version": "4.2.0",
-  "description": "Reed-Solomon erasure coding in pure Javascript with an optional native binding",
-  "main": "index.js",
+  "description": "Fast, reliable Reed-Solomon erasure coding as a native addon for Node.js",
+  "main": "binding.node",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ronomon/reed-solomon.git"
@@ -30,6 +30,6 @@
   },
   "dependencies": {
     "@ronomon/queue": "^3.0.0",
-    "nan": "^2.8.0"
+    "nan": "^2.10.0"
   }
 }
