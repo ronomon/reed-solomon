@@ -705,8 +705,16 @@ void encode(
   ) {
     // Optimization for 1 erasure (i < k + 1), encoding only targets:
     uint8_t* target = shards[flags_first(targets)];
+    int copied = 0;
     for (int i = 0; i < k + 1; i++) {
-      if (sources & (1 << i)) dot_xor(shards[i], target, shardSize);
+      if (sources & (1 << i)) {
+        if (!copied) {
+          dot_cpy(shards[i], target, shardSize);
+          copied = 1;
+        } else {
+          dot_xor(shards[i], target, shardSize);
+        }
+      }
     }
     return;
   }

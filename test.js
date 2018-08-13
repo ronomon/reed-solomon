@@ -317,7 +317,7 @@ queue.onData = function(args, end) {
   );
   var buffer = cipher.update(Buffer.alloc(bufferOffset + bufferSize));
   Assert(buffer.length === bufferOffset + bufferSize);
-  var parity = Buffer.alloc(parityOffset + paritySize);
+  var parity = cipher.update(Buffer.alloc(parityOffset + paritySize));
   if (parityOffset) {
     Assert(
       cipher.update(Buffer.alloc(parityOffset)).copy(parity, 0) === parityOffset
@@ -360,10 +360,6 @@ queue.onData = function(args, end) {
       for (var i = 0; i < k; i++) Assert(Hash(shards[i]) === hashes[i]);
       for (var i = k; i < k + m; i++) hashes[i] = Hash(shards[i]);
       // Test against fixed vector:
-      var key = '';
-      key += String(k).padStart(2, '0') + ',';
-      key += String(m).padStart(2, '0') + ',';
-      key += String(shardSize).padStart(6, '0');
       var result = Hash(hashes.join(','));
       if (regenerate) {
         console.log('  [' +
