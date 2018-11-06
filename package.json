@@ -3,6 +3,12 @@
   "version": "5.0.1",
   "description": "Fast, reliable Reed-Solomon erasure coding as a native addon for Node.js",
   "main": "binding.node",
+  "files": [
+    "benchmark.js",
+    "binding.cc",
+    "binding.gyp",
+    "test.js"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ronomon/reed-solomon.git"
