@@ -12,11 +12,7 @@ var MAX_M = Math.min(4, ReedSolomon.MAX_M);
 var SAMPLES = 40;
 var SHARD_SIZES = [
   4096,
-  8192,
-  16384,
-  32768,
   65536,
-  131072,
   262144
 ];
 var THREADS = 1;

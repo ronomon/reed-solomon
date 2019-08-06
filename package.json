@@ -5,7 +5,7 @@
   "main": "binding.node",
   "files": [
     "benchmark.js",
-    "binding.cc",
+    "binding.c",
     "binding.gyp",
     "test.js"
   ],
@@ -14,7 +14,6 @@
     "url": "git+https://github.com/ronomon/reed-solomon.git"
   },
   "keywords": [
-    "reedsolomon",
     "reed-solomon",
     "erasure coding",
     "replication",
@@ -36,7 +35,6 @@
     "test": "node test.js"
   },
   "dependencies": {
-    "@ronomon/queue": "^3.0.0",
-    "nan": "^2.10.0"
+    "@ronomon/queue": "^3.0.1"
   }
 }

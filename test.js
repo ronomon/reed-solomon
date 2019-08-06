@@ -1,3 +1,5 @@
+var assert = require('assert');
+
 var Node = { crypto: require('crypto') };
 var Queue = require('@ronomon/queue');
 var ReedSolomon = require('./binding.node');
@@ -25,6 +27,7 @@ function Args(options) {
     var context = options.context;
   } else if (create) {
     var context = ReedSolomon.create(k, m);
+    assert(Buffer.isBuffer(context));
   } else {
     var context = Buffer.alloc(3 + k * w * m * w);
     context[0] = w;
@@ -67,9 +70,14 @@ function Args(options) {
   ];
 }
 
-function Assert(statement) {
-  if (!statement) throw new Error('assertion failed');
-}
+var BadArgs = {
+  create: 'bad arguments, expected: (int k, int m)',
+  encode: 'bad arguments, expected: (Buffer context, int sources, ' +
+          'int targets, Buffer buffer, int bufferOffset, int bufferSize, ' +
+          'Buffer parity, int parityOffset, int paritySize, function end)',
+  XOR:    'bad arguments, expected: (Buffer source, int sourceOffset, ' +
+          'Buffer target, int targetOffset, int size)'
+};
 
 function Bits(flags) {
   var bits = 0;
@@ -185,20 +193,30 @@ function XOR(sources) {
 
 var namespace = 'ReedSolomon';
 
+var B0 = Buffer.alloc(0);
+var B1 = Buffer.alloc(1);
+var B8 = Buffer.alloc(8);
+var B16 = Buffer.alloc(16);
+
 [
-  [ 'create', [], 'bad arguments, expected: (int k, int m)' ],
-  [ 'create', [1, 2, 3], 'bad arguments, expected: (int k, int m)' ],
-  [ 'create', ['1', '2'], 'bad arguments, expected: (int k, int m)' ],
-  [ 'create', [1.001, 2], 'bad arguments, expected: (int k, int m)' ],
-  [ 'create', [2, 1.001], 'bad arguments, expected: (int k, int m)' ],
-  [ 'create', [undefined, 1], 'bad arguments, expected: (int k, int m)' ],
-  [ 'create', [1 / 0, 1], 'bad arguments, expected: (int k, int m)' ],
+  [ 'create', [], BadArgs.create ],
+  [ 'create', [1, 2, 3], BadArgs.create ],
+  [ 'create', ['1', '2'], BadArgs.create ],
+  [ 'create', [1.001, 2], BadArgs.create ],
+  [ 'create', [2, 1.001], BadArgs.create ],
+  [ 'create', [undefined, 1], BadArgs.create ],
+  [ 'create', [1 / 0, 1], BadArgs.create ],
   [ 'create', [0, 1], 'k < 1' ],
   [ 'create', [ReedSolomon.MAX_K + 1, 1], 'k > MAX_K' ],
   [ 'create', [1, 0], 'm < 1' ],
   [ 'create', [1, ReedSolomon.MAX_M + 1], 'm > MAX_M' ],
-  [ 'encode', Args({ context: Buffer.alloc(2) }), 'context.length < 3' ],
-  [ 'encode', Args({ context: Buffer.from([2,1,1]) }), 'context.length is bad'],
+  [ 'encode', [], BadArgs.encode ],
+  [ 'encode', Args({ context: B1 }), 'context.length < 3' ],
+  [
+    'encode',
+    Args({ context: Buffer.from([2,1,1]) }),
+    'context.length is bad'
+  ],
   [
     'encode',
     Args({ context: Buffer.from([2,1,1,1,1,1,1]) }),
@@ -227,7 +245,22 @@ var namespace = 'ReedSolomon';
   [ 'encode', Args({ bufferSize: 0 }), 'bufferSize == 0' ],
   [
     'encode',
-    Args({ bufferOffset: 1, bufferSize: 8, buffer: Buffer.alloc(8) }),
+    Args({ bufferOffset: 4294967296, bufferSize: 8, buffer: B8 }),
+    BadArgs.encode
+  ],
+  [
+    'encode',
+    Args({ bufferOffset: 0, bufferSize: 4294967296, buffer: B8 }),
+    BadArgs.encode
+  ],
+  [
+    'encode',
+    Args({ bufferOffset: 1, bufferSize: 8, buffer: B8 }),
+    'bufferOffset + bufferSize > buffer.length'
+  ],
+  [
+    'encode',
+    Args({ bufferOffset: 4294967295, bufferSize: 8, buffer: B8 }),
     'bufferOffset + bufferSize > buffer.length'
   ],
   [ 'encode', Args({ bufferSize: 16 }), 'bufferSize % k != 0' ],
@@ -235,12 +268,40 @@ var namespace = 'ReedSolomon';
   [ 'encode', Args({ bufferSize: 12 }), 'shardSize % 8 != 0' ],
   [ 'encode', Args({ paritySize: 0 }), 'paritySize == 0' ],
   [ 'encode', Args({ paritySize: 7 }), 'paritySize % m != 0' ],
-  [ 'encode', Args({ paritySize: 8 }), 'paritySize / m != bufferSize / k'],
+  [ 'encode', Args({ paritySize: 8 }), 'paritySize / m != bufferSize / k' ],
   [
     'encode',
-    Args({ parityOffset: 1, paritySize: 16, parity: Buffer.alloc(16) }),
+    Args({ parityOffset: 4294967296, paritySize: 16, parity: B16 }),
+    BadArgs.encode
+  ],
+  [
+    'encode',
+    Args({ parityOffset: 0, paritySize: 4294967296, parity: B16 }),
+    BadArgs.encode
+  ],
+  [
+    'encode',
+    Args({ parityOffset: 1, paritySize: 16, parity: B16 }),
     'parityOffset + paritySize > parity.length'
-  ]
+  ],
+  [
+    'encode',
+    Args({ parityOffset: 4294967295, paritySize: 16, parity: B16 }),
+    'parityOffset + paritySize > parity.length'
+  ],
+  [ 'search', [undefined], 'expected no arguments' ],
+  [ 'XOR', [], BadArgs.XOR ],
+  [ 'XOR', [null, 0, null, 0, 0], BadArgs.XOR ],
+  [ 'XOR', [B1, 0, B1, 0, -1], BadArgs.XOR ],
+  [ 'XOR', [B1, 4294967296, B1, 0, 1], BadArgs.XOR ],
+  [ 'XOR', [B1, 0, B1, 4294967296, 1], BadArgs.XOR ],
+  [ 'XOR', [B1, 0, B1, 0, 4294967296], BadArgs.XOR ],
+  [ 'XOR', [B0, 1, B0, 0, 0], 'sourceOffset + size > source.length' ],
+  [ 'XOR', [B0, 0, B1, 0, 1], 'sourceOffset + size > source.length' ],
+  [ 'XOR', [B1, 4294967295, B1, 0, 1], 'sourceOffset + size > source.length' ],
+  [ 'XOR', [B0, 0, B0, 1, 0], 'targetOffset + size > target.length' ],
+  [ 'XOR', [B1, 0, B0, 0, 1], 'targetOffset + size > target.length' ],
+  [ 'XOR', [B1, 0, B1, 4294967295, 1], 'targetOffset + size > target.length' ]
 ].forEach(
   function(exception) {
     var error;
@@ -285,7 +346,7 @@ var namespace = 'ReedSolomon';
       expect[targetOffset + index] ^= source[sourceOffset + index];
     }
     ReedSolomon.XOR(source, sourceOffset, target, targetOffset, size);
-    Assert(Hash(target) === Hash(expect));
+    assert(Hash(target) === Hash(expect));
   }
 })();
 
@@ -303,9 +364,9 @@ queue.onData = function(args, end) {
   var w = context[0];
   console.log(new Array(50).join('='));
   console.log('        W=' + w + ' K=' + k + ' M=' + m);
-  Assert(w == 2 || w == 4 || w == 8);
-  Assert(k + m <= (1 << w));
-  Assert(context.length === 3 + k * w * m * w);
+  assert(w == 2 || w == 4 || w == 8);
+  assert(k + m <= (1 << w));
+  assert(context.length === 3 + k * w * m * w);
   var bufferSize = shardSize * k;
   var paritySize = shardSize * m;
   var seed = Node.crypto.createHash('SHA256');
@@ -316,10 +377,10 @@ queue.onData = function(args, end) {
     Buffer.alloc(16)
   );
   var buffer = cipher.update(Buffer.alloc(bufferOffset + bufferSize));
-  Assert(buffer.length === bufferOffset + bufferSize);
+  assert(buffer.length === bufferOffset + bufferSize);
   var parity = cipher.update(Buffer.alloc(parityOffset + paritySize));
   if (parityOffset) {
-    Assert(
+    assert(
       cipher.update(Buffer.alloc(parityOffset)).copy(parity, 0) === parityOffset
     );
   }
@@ -354,10 +415,10 @@ queue.onData = function(args, end) {
     function(error) {
       if (error) return end(error);
       Inspect(args, buffer, parity);
-      Assert(Hash(context) == hashContext);
-      Assert(Hash(buffer.slice(0, bufferOffset)) == hashBuffer);
-      Assert(Hash(parity.slice(0, parityOffset)) == hashParity);
-      for (var i = 0; i < k; i++) Assert(Hash(shards[i]) === hashes[i]);
+      assert(Hash(context) == hashContext);
+      assert(Hash(buffer.slice(0, bufferOffset)) == hashBuffer);
+      assert(Hash(parity.slice(0, parityOffset)) == hashParity);
+      for (var i = 0; i < k; i++) assert(Hash(shards[i]) === hashes[i]);
       for (var i = k; i < k + m; i++) hashes[i] = Hash(shards[i]);
       // Test against fixed vector:
       var result = Hash(hashes.join(','));
@@ -380,14 +441,14 @@ queue.onData = function(args, end) {
           )
         );
       } else {
-        Assert(result === vector);
+        assert(result === vector);
       }
 
       // First parity shard must always be an XOR of all data shards:
-      Assert(Hash(XOR(shards.slice(0, k))) === hashes[k]);
+      assert(Hash(XOR(shards.slice(0, k))) === hashes[k]);
       if (k === 1) {
         // All shards must be identical when k=1:
-        for (var i = 1; i < k + m; i++) Assert(hashes[i] === hashes[0]);
+        for (var i = 1; i < k + m; i++) assert(hashes[i] === hashes[0]);
       }
       // Choose source and target shards:
       var sources = 0;  
@@ -406,9 +467,9 @@ queue.onData = function(args, end) {
       while (sourcesIndex < sourcesLength) {
         sources |= (1 << indices[targetsLength + sourcesIndex++]);
       }
-      Assert((sources & targets) == 0);
-      Assert(Bits(sources) >= k && Bits(sources) <= k + m);
-      Assert(Bits(targets) >= 1 && Bits(targets) <= m);
+      assert((sources & targets) == 0);
+      assert(Bits(sources) >= k && Bits(sources) <= k + m);
+      assert(Bits(targets) >= 1 && Bits(targets) <= m);
       for (var i = 0; i < k + m; i++) {
         voided[i] = undefined;
         if (targets & (1 << i)) {
@@ -432,9 +493,9 @@ queue.onData = function(args, end) {
         function(error) {
           if (error) return end(error);
           Inspect(args, buffer, parity, sources, targets);
-          Assert(Hash(context) === hashContext);
-          Assert(Hash(buffer.slice(0, bufferOffset)) === hashBuffer);
-          Assert(Hash(parity.slice(0, parityOffset)) === hashParity);
+          assert(Hash(context) === hashContext);
+          assert(Hash(buffer.slice(0, bufferOffset)) === hashBuffer);
+          assert(Hash(parity.slice(0, parityOffset)) === hashParity);
           var strictVoided = (
             k === 1 ||
             (
@@ -449,13 +510,13 @@ queue.onData = function(args, end) {
               // Shard was neither a source nor target.
               if (strictVoided) {
                 // We expect an optimization to avoid the shard:
-                Assert(hashShard === voided[i]);
+                assert(hashShard === voided[i]);
               } else {
                 // We are free to repair the shard if needed for other shards:
-                Assert(hashShard === hashes[i] || hashShard === voided[i]);
+                assert(hashShard === hashes[i] || hashShard === voided[i]);
               }
             } else {
-              Assert(hashShard === hashes[i]);
+              assert(hashShard === hashes[i]);
             }
           }
           end();
@@ -470,8 +531,9 @@ queue.onEnd = function(error) {
   console.log('        PASSED');
   console.log(new Array(50).join('='));
 };
-Assert(ReedSolomon.MAX_K === 24);
-Assert(ReedSolomon.MAX_M === 6);
+assert(typeof ReedSolomon.search === 'function');
+assert(ReedSolomon.MAX_K === 24);
+assert(ReedSolomon.MAX_M === 6);
 queue.concat([
   [ 1, 1,  3,  2,      8, '8f2f6338f7f86123959816e8fbb3ce1f'],
   [ 1, 1,  4,  2,  77856, '47b8befeab9ff4548d46121e3fd311e4'],

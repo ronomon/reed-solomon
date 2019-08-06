@@ -1,8 +1,26 @@
-#include <nan.h>
+#include <assert.h>
+#include <limits.h>
+#include <math.h>
+#include <node_api.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define RESOURCE_NAME "@ronomon/reed-solomon"
+
+#define OK(call)                                                               \
+  assert((call) == napi_ok);
+
+#define THROW(env, message)                                                    \
+  do {                                                                         \
+    napi_throw_error((env), NULL, (message));                                  \
+    return NULL;                                                               \
+  } while (0)
 
 #define MAX_K 24
 #define MAX_M 6
+#define MAX_W 8
 
 // Parameters for (k,m) found by `search()` are in PARAMETERS[k-1][m-1]:
 // PARAMETERS[k-1][m-1] = k, m, w, p, x, y, b:
@@ -12,9 +30,9 @@
 // w = The Galois Field exponent. The smaller the exponent, the less bits.
 // p = The primitive polynomial used to generate the Galois Field.
 //
-//     We do not need to use x or y when m<=2:
-// x = The column offset used to generate the matrix, -1 when m<=2.
-// y = The row offset used to generate the matrix, -1 when m<=2.
+//     We do not use x or y when m <= 2:
+// x = The column offset used to generate the matrix, -1 when m <= 2.
+// y = The row offset used to generate the matrix, -1 when m <= 2.
 //
 // b = The number of bits in the resulting bit matrix.
 static const int PARAMETERS[24][6][7] = {
@@ -212,13 +230,15 @@ static const int PARAMETERS[24][6][7] = {
   }
 };
 
-int g_divide(
+static int g_divide(
   const int* log,
   const int* exp,
   const int w,
   const int a,
   const int b
 ) {
+  assert(w <= MAX_W);
+  assert(w == 2 || w == 4 || w == 8);
   const int y = (1 << w) - 1;
   assert(a <= y);
   assert(b <= y);
@@ -227,13 +247,15 @@ int g_divide(
   return exp[(log[a] + y - log[b]) % y];
 }
 
-int g_multiply(
+static int g_multiply(
   const int* log,
   const int* exp,
   const int w,
   const int a,
   const int b
 ) {
+  assert(w <= MAX_W);
+  assert(w == 2 || w == 4 || w == 8);
   const int y = (1 << w) - 1;
   assert(a <= y);
   assert(b <= y);
@@ -241,7 +263,16 @@ int g_multiply(
   return exp[(log[a] + log[b]) % y];
 }
 
-int bitmatrix_m0_optimized(const int w, const int k, const uint8_t* bitmatrix) {
+static int bitmatrix_m0_optimized(
+  const int w,
+  const int k,
+  const uint8_t* bitmatrix
+) {
+  assert(w <= MAX_W);
+  assert(w == 2 || w == 4 || w == 8);
+  assert(k >= 1);
+  assert(k <= MAX_K);
+  assert(k < (1 << w));
   // We assume that bitmatrix is an encoding (not decoding) bitmatrix.
   // If row 0 is all ones then an erasure of shard < k + 1 can be optimized.
   for (int c = 0; c < k; c++) {
@@ -256,13 +287,17 @@ int bitmatrix_m0_optimized(const int w, const int k, const uint8_t* bitmatrix) {
   return 1;
 }
 
-void create_bitmatrix_decoding_swap(uint8_t* buffer, const int x, const int y) {
+static void create_bitmatrix_decoding_swap(
+  uint8_t* buffer,
+  const int x,
+  const int y
+) {
   const uint8_t tmp = buffer[x];
   buffer[x] = buffer[y];
   buffer[y] = tmp;
 }
 
-void create_bitmatrix_decoding_invert(
+static void create_bitmatrix_decoding_invert(
   uint8_t* source,
   uint8_t* target,
   const int rows
@@ -306,7 +341,7 @@ void create_bitmatrix_decoding_invert(
   }
 }
 
-void create_bitmatrix_decoding(
+static void create_bitmatrix_decoding(
   const int w,
   const int k,
   const int m,
@@ -314,12 +349,15 @@ void create_bitmatrix_decoding(
   const uint8_t* source,
   uint8_t* target
 ) {
+  assert(w <= MAX_W);
   assert(w == 2 || w == 4 || w == 8);
   assert(k >= 1);
+  assert(k <= MAX_K);
   assert(m >= 1);
+  assert(m <= MAX_M);
   assert(k + m <= (1 << w));
   const int kww = k * w * w;
-  uint8_t matrix[kww * k];
+  uint8_t matrix[MAX_K * MAX_K * MAX_W * MAX_W];
   for (int a = 0; a < k; a++) {
     if (sourceIndex[a] < k) {
       for (int b = 0; b < kww; b++) matrix[kww * a + b] = 0;
@@ -337,7 +375,7 @@ void create_bitmatrix_decoding(
   create_bitmatrix_decoding_invert(matrix, target, k * w);
 }
 
-int create_bitmatrix_encoding(
+static int create_bitmatrix_encoding(
   const int* log,
   const int* exp,
   const int w,
@@ -346,6 +384,13 @@ int create_bitmatrix_encoding(
   const uint8_t* matrix,
   uint8_t* bitmatrix
 ) {
+  assert(w <= MAX_W);
+  assert(w == 2 || w == 4 || w == 8);
+  assert(k >= 1);
+  assert(k <= MAX_K);
+  assert(m >= 1);
+  assert(m <= MAX_M);
+  assert(k + m <= (1 << w));
   int count = 0;
   for (int r = 0; r < m; r++) {
     for (int c = 0; c < k; c++) {
@@ -364,7 +409,7 @@ int create_bitmatrix_encoding(
   return count;
 }
 
-int create_matrix(
+static int create_matrix(
   const int* log,
   const int* exp,
   const int* bit,
@@ -376,11 +421,14 @@ int create_matrix(
   const int y,
   uint8_t* matrix
 ) {
+  assert(w <= MAX_W);
   assert(w == 2 || w == 4 || w == 8);
   assert(k >= 1);
+  assert(k <= MAX_K);
   assert(m >= 1);
+  assert(m <= MAX_M);
+  assert(k + m <= (1 << w));
   const int z = 1 << w;
-  assert(k + m <= z);
   int count = bit[1] * k;
   if (m == 1) {
     // Use XOR for row 0.
@@ -457,12 +505,14 @@ int create_matrix(
   return count;
 }
 
-int create_tables_bits(
+static int create_tables_bits(
   const int* log,
   const int* exp,
   const int w,
   int n
 ) {
+  assert(w <= MAX_W);
+  assert(w == 2 || w == 4 || w == 8);
   int count = 0;
   for (int r = 0; r < w; r++) {
     for (int c = 0; c < w; c++) {
@@ -473,7 +523,7 @@ int create_tables_bits(
   return count;
 }
 
-void create_tables(
+static void create_tables(
   const int w,
   const int p,
   int* log,
@@ -481,6 +531,8 @@ void create_tables(
   int* bit,
   int* min
 ) {
+  assert(w <= MAX_W);
+  assert(w == 2 || w == 4 || w == 8);
   const int y = (1 << w) - 1;
   const int z = (1 << w);
   // Generate log and exp tables:
@@ -532,11 +584,11 @@ void create_tables(
   assert(min[y] > 0);
 }
 
-uintptr_t unaligned64(const uint8_t* pointer) {
+static uintptr_t unaligned64(const uint8_t* pointer) {
   return ((uintptr_t) pointer) & ((uintptr_t) 7);
 }
 
-uint32_t dot_chunk_size(
+static uint32_t dot_chunk_size(
   const int w,
   const int k,
   const uint32_t shardSize
@@ -546,7 +598,10 @@ uint32_t dot_chunk_size(
   // We therefore reduce the chunkSize if necessary to stay within the cache.
   // The shardSize should ideally be a power of 2 to do this optimally.
   // N.B. The chunkSize changes the encoded parity result.
+  assert(w <= MAX_W);
   assert(w == 2 || w == 4 || w == 8);
+  assert(k >= 1);
+  assert(k <= MAX_K);
   assert(k < (1 << w));
   assert(shardSize % w == 0);
   uint32_t chunkSize = shardSize / w;
@@ -562,13 +617,13 @@ uint32_t dot_chunk_size(
   return chunkSize;
 }
 
-void dot_cpy(uint8_t* source, uint8_t* target, uint32_t length) {
+static void dot_cpy(uint8_t* source, uint8_t* target, uint32_t length) {
   assert(length > 0);
   assert(source != target);
   memcpy(target, source, length);
 }
 
-void dot_xor(uint8_t* source, uint8_t* target, uint32_t length) {
+static void dot_xor(uint8_t* source, uint8_t* target, uint32_t length) {
   assert(source != target);
   assert(length > 0);
   uint8_t* sourceEnd = source + length;
@@ -623,7 +678,7 @@ void dot_xor(uint8_t* source, uint8_t* target, uint32_t length) {
   assert(length == 0);
 }
 
-void dot(
+static void dot(
   const int w,
   const int k,
   uint8_t** shards,
@@ -632,8 +687,11 @@ void dot(
   const int* sourceIndex,
   const int targetIndex
 ) {
-  assert(k >= 1 && k < (1 << w));
+  assert(w <= MAX_W);
   assert(w == 2 || w == 4 || w == 8);
+  assert(k >= 1);
+  assert(k <= MAX_K);
+  assert(k < (1 << w));
   assert(shardSize % w == 0);
   uint32_t chunkSize = dot_chunk_size(w, k, shardSize);
   assert(w * chunkSize <= shardSize);
@@ -664,7 +722,7 @@ void dot(
   assert(shardOffset == shardSize);
 }
 
-int flags_count(uint32_t flags) {
+static int flags_count(uint32_t flags) {
   int count = 0;
   while (flags > 0) {
     if (flags & 1) count++; // Check lower bit.
@@ -673,14 +731,14 @@ int flags_count(uint32_t flags) {
   return count;
 }
 
-int flags_first(const uint32_t flags) {
+static int flags_first(const uint32_t flags) {
   int i = 0;
   while ((flags & (1 << i)) == 0) i++;
   assert((flags & (1 << i)) != 0);
   return i;
 }
 
-void encode(
+static void reed_solomon_encode(
   const int w,
   const int k,
   const int m,
@@ -690,6 +748,13 @@ void encode(
   uint8_t** shards,
   const uint32_t shardSize
 ) {
+  assert(w <= MAX_W);
+  assert(w == 2 || w == 4 || w == 8);
+  assert(k >= 1);
+  assert(k <= MAX_K);
+  assert(m >= 1);
+  assert(m <= MAX_M);
+  assert(k + m <= (1 << w));
   if (k == 1) {
     // Optimization for pure replication, encoding only targets:
     uint8_t* source = shards[flags_first(sources)];
@@ -729,14 +794,14 @@ void encode(
   }
   if (!(sources & (1 << k))) max = k;
   if (kerasures > 1 || (kerasures == 1 && !(sources & (1 << k)))) {
-    int s[k];
+    int s[MAX_K];
     int si = 0;
     int sj = 0;
     while (sj < k) {
       if (sources & (1 << si)) s[sj++] = si;
       si++;
     }
-    uint8_t bitmatrixDecoding[kww * k];
+    uint8_t bitmatrixDecoding[MAX_K * MAX_K * MAX_W * MAX_W];
     create_bitmatrix_decoding(
       w,
       k,
@@ -753,115 +818,188 @@ void encode(
     }
   }
   if (kerasures > 0) {
-    int s[k];
+    int s[MAX_K];
     for (int si = 0; si < k; si++) s[si] = (si < max) ? si : si + 1;
     dot(w, k, shards, shardSize, bitmatrixEncoding, s, max);
   }
   for (int i = 0; i < m; i++) {
     if (!(sources & (1 << (k + i)))) {
-      int s[k];
+      int s[MAX_K];
       for (int si = 0; si < k; si++) s[si] = si;
       dot(w, k, shards, shardSize, bitmatrixEncoding + kww * i, s, k + i);
     }
   }
 }
 
-class EncodeWorker : public Nan::AsyncWorker {
- public:
-  EncodeWorker(
-    v8::Local<v8::Object> &contextHandle,
-    const uint32_t contextSize,
-    const uint32_t sources,
-    const uint32_t targets,
-    v8::Local<v8::Object> &bufferHandle,
-    const uint32_t bufferOffset,
-    const uint32_t bufferSize,
-    v8::Local<v8::Object> &parityHandle,
-    const uint32_t parityOffset,
-    const uint32_t paritySize,
-    const uint32_t shardSize,
-    Nan::Callback *end
-  ) : Nan::AsyncWorker(end),
-      contextSize(contextSize),
-      sources(sources),
-      targets(targets),
-      bufferOffset(bufferOffset),
-      bufferSize(bufferSize),
-      parityOffset(parityOffset),
-      paritySize(paritySize),
-      shardSize(shardSize) {
-        SaveToPersistent("contextHandle", contextHandle);
-        SaveToPersistent("bufferHandle", bufferHandle);
-        SaveToPersistent("parityHandle", parityHandle);
-        context = (const uint8_t*) node::Buffer::Data(contextHandle);
-        buffer = (uint8_t*) node::Buffer::Data(bufferHandle);
-        parity = (uint8_t*) node::Buffer::Data(parityHandle);
+static int arg_buf(
+  napi_env env,
+  napi_value value,
+  uint8_t** buffer,
+  uint32_t* buffer_length
+) {
+  assert(value != NULL);
+  assert(*buffer == NULL);
+  assert(*buffer_length == 0);
+  bool is_buffer = 0;
+  OK(napi_is_buffer(env, value, &is_buffer));
+  if (!is_buffer) return 0;
+  size_t length = 0;
+  OK(napi_get_buffer_info(env, value, (void**) buffer, &length));
+  assert(*buffer != NULL);
+  assert(length <= UINT32_MAX);
+  *buffer_length = length;
+  return 1;
+}
+
+static int arg_int(napi_env env, napi_value value, uint32_t* integer) {
+  assert(*integer == 0);
+  double temp = 0;
+  if (
+    // We get the value as a double so we can check for NaN, Infinity and float:
+    // https://github.com/nodejs/node/issues/26323
+    napi_get_value_double(env, value, &temp) != napi_ok ||
+    temp < 0 ||
+    isnan(temp) ||
+    // Infinity, also prevent UB for double->int cast below:
+    // https://groups.google.com/forum/#!topic/comp.lang.c/rhPzd4bgKJk
+    temp > UINT32_MAX ||
+    // Float:
+    (double) ((uint32_t) temp) != temp
+  ) {
+    return 0;
   }
+  *integer = (uint32_t) temp;
+  return 1;
+}
 
-  ~EncodeWorker() {}
+void set_int(
+  napi_env env,
+  napi_value object,
+  const char* name,
+  const int64_t integer
+) {
+  assert(integer >= 0);
+  napi_value value;
+  OK(napi_create_int64(env, integer, &value));
+  OK(napi_set_named_property(env, object, name, value));
+}
 
-  void Execute () {
-    const int w = context[0];
-    assert(w == 2 || w == 4 || w == 8);
-    const int k = context[1];
-    assert(k >= 1 && k <= MAX_K);
-    const int m = context[2];
-    assert(m >= 1 && m <= MAX_M);
-    assert(k + m <= (1 << w));
-    assert(contextSize == (uint32_t)(3 + k * w * m * w));
-    const uint8_t* bitmatrix = context + 3;
-    uint8_t* shards[k + m];
-    assert(shardSize * k <= bufferSize);
-    for (int index = 0; index < k; index++) {
-      shards[index] = buffer + bufferOffset + shardSize * index;
-    }
-    assert(shardSize * m <= paritySize);
-    for (int index = 0; index < m; index++) {
-      shards[index + k] = parity + parityOffset + shardSize * index;
-    }
-    assert(shardSize > 0);
-    encode(
-      w,
-      k,
-      m,
-      bitmatrix,
-      sources,
-      targets,
-      shards,
-      shardSize
-    );
-  }
+void set_method(
+  napi_env env,
+  napi_value object,
+  const char* name,
+  void* method
+) {
+  napi_value value;
+  OK(napi_create_function(env, NULL, 0, method, NULL, &value));
+  OK(napi_set_named_property(env, object, name, value));
+}
 
- private:
-  const uint8_t* context;
-  const uint32_t contextSize;
-  const uint32_t sources;
-  const uint32_t targets;
+struct task_data {
+  uint8_t* context;
+  uint32_t contextSize;
+  uint32_t sources;
+  uint32_t targets;
   uint8_t* buffer;
-  const uint32_t bufferOffset;
-  const uint32_t bufferSize;
+  uint32_t bufferSize;
   uint8_t* parity;
-  const uint32_t parityOffset;
-  const uint32_t paritySize;
-  const uint32_t shardSize;
+  uint32_t paritySize;
+  uint32_t shardSize;
+  napi_ref ref_context;
+  napi_ref ref_buffer;
+  napi_ref ref_parity;
+  napi_ref ref_callback;
+  napi_async_work async_work;
 };
 
-NAN_METHOD(create) {
-  if (info.Length() != 2 || !info[0]->IsUint32() || !info[1]->IsUint32()) {
-    return Nan::ThrowError("bad arguments, expected: (int k, int m)");
+void task_execute(napi_env env, void* data) {
+  struct task_data* task = data;
+  assert(task->context != NULL);
+  assert(task->contextSize > 3);
+  assert(task->buffer != NULL);
+  assert(task->parity != NULL);
+  assert(task->shardSize > 0);
+  const int w = task->context[0];
+  assert(w <= MAX_W);
+  assert(w == 2 || w == 4 || w == 8);
+  const int k = task->context[1];
+  assert(k >= 1);
+  assert(k <= MAX_K);
+  const int m = task->context[2];
+  assert(m >= 1);
+  assert(m <= MAX_M);
+  assert(k + m <= (1 << w));
+  assert(task->contextSize == (uint32_t) (3 + k * w * m * w));
+  const uint8_t* bitmatrix = task->context + 3;
+  uint8_t* shards[MAX_K + MAX_M];
+  assert(task->shardSize * k <= task->bufferSize);
+  for (int index = 0; index < k; index++) {
+    shards[index] = task->buffer + task->shardSize * index;
   }
-  const int k = info[0]->Uint32Value();
-  const int m = info[1]->Uint32Value();
-  if (k < 1) return Nan::ThrowError("k < 1");
-  if (k > MAX_K) return Nan::ThrowError("k > MAX_K");
-  if (m < 1) return Nan::ThrowError("m < 1");
-  if (m > MAX_M) return Nan::ThrowError("m > MAX_M");
+  assert(task->shardSize * m <= task->paritySize);
+  for (int index = 0; index < m; index++) {
+    shards[index + k] = task->parity + task->shardSize * index;
+  }
+  reed_solomon_encode(
+    w,
+    k,
+    m,
+    bitmatrix,
+    task->sources,
+    task->targets,
+    shards,
+    task->shardSize
+  );
+}
+
+void task_complete(napi_env env, napi_status status, void* data) {
+  struct task_data* task = data;
+  assert(status == napi_ok);
+  napi_value scope;
+  OK(napi_get_global(env, &scope));
+  napi_value callback;
+  OK(napi_get_reference_value(env, task->ref_callback, &callback));
+  // Do not assert the return status of napi_call_function():
+  // If the callback throws then the return status will not be napi_ok.
+  napi_call_function(env, scope, callback, 0, NULL, NULL);
+  assert(task->ref_context != NULL);
+  assert(task->ref_buffer != NULL);
+  assert(task->ref_parity != NULL);
+  assert(task->ref_callback != NULL);
+  assert(task->async_work != NULL);
+  OK(napi_delete_reference(env, task->ref_context));
+  OK(napi_delete_reference(env, task->ref_buffer));
+  OK(napi_delete_reference(env, task->ref_parity));
+  OK(napi_delete_reference(env, task->ref_callback));
+  OK(napi_delete_async_work(env, task->async_work));
+  free(task);
+  task = NULL;
+}
+
+static napi_value create(napi_env env, napi_callback_info info) {
+  size_t argc = 2;
+  napi_value argv[2];
+  OK(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  uint32_t ku = 0;
+  uint32_t mu = 0;
+  if (argc != 2 || !arg_int(env, argv[0], &ku) || !arg_int(env, argv[1], &mu)) {
+    THROW(env, "bad arguments, expected: (int k, int m)");
+  }
+  if (ku < 1) THROW(env, "k < 1");
+  if (ku > MAX_K) THROW(env, "k > MAX_K");
+  if (mu < 1) THROW(env, "m < 1");
+  if (mu > MAX_M) THROW(env, "m > MAX_M");
+  assert(MAX_K <= INT_MAX);
+  assert(MAX_M <= INT_MAX);
+  int k = (int) ku;
+  int m = (int) mu;
   assert(sizeof(PARAMETERS) == MAX_K * MAX_M * 7 * sizeof(int));
   assert(PARAMETERS[k - 1][m - 1][0] == k);
   assert(PARAMETERS[k - 1][m - 1][1] == m);
   int w = PARAMETERS[k - 1][m - 1][2];
-  assert(k + m <= (1 << w));
+  assert(w <= MAX_W);
   assert(w == 2 || w == 4 || w == 8);
+  assert(k + m <= (1 << w));
   int p = PARAMETERS[k - 1][m - 1][3];
   int x = PARAMETERS[k - 1][m - 1][4];
   int y = PARAMETERS[k - 1][m - 1][5];
@@ -874,150 +1012,173 @@ NAN_METHOD(create) {
   int b = PARAMETERS[k - 1][m - 1][6];
   assert(b >= 1);
   assert(b <= k * w * m * w);
-  int log[1 << w];
-  int exp[1 << w];
-  int bit[1 << w];
-  int min[1 << w];
+  int log[1 << MAX_W];
+  int exp[1 << MAX_W];
+  int bit[1 << MAX_W];
+  int min[1 << MAX_W];
   create_tables(w, p, log, exp, bit, min);
-  uint8_t matrix[k * m];
+  uint8_t matrix[MAX_K * MAX_M];
   assert(create_matrix(log, exp, bit, min, w, k, m, x, y, matrix) == b);
-  uint32_t contextSize = 3 + k * w * m * w;
-  uint8_t* context = (uint8_t*) malloc(contextSize);
-  if (!context) return Nan::ThrowError("context malloc failed");
+  size_t contextSize = 3 + k * w * m * w;
+  uint8_t* context = NULL;
+  napi_value buffer = NULL;
+  OK(napi_create_buffer(env, contextSize, (void**) &context, &buffer));
+  assert(context != NULL);
+  assert(buffer != NULL);
   context[0] = w;
   context[1] = k;
   context[2] = m;
   uint8_t* bitmatrix = context + 3;
   assert(create_bitmatrix_encoding(log, exp, w, k, m, matrix, bitmatrix) == b);
   assert(bitmatrix_m0_optimized(w, k, bitmatrix) == 1);
-  info.GetReturnValue().Set(
-    Nan::NewBuffer((char*) context, contextSize).ToLocalChecked()
-  );
+  return buffer;
 }
 
-NAN_METHOD(encode) {
+static napi_value encode(napi_env env, napi_callback_info info) {
+  size_t argc = 10;
+  napi_value argv[10];
+  OK(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  uint8_t* context = NULL;
+  uint32_t contextLength = 0;
+  uint32_t sources = 0;
+  uint32_t targets = 0;
+  uint8_t* buffer = NULL;
+  uint32_t bufferLength = 0;
+  uint32_t bufferOffset = 0;
+  uint32_t bufferSize = 0;
+  uint8_t* parity = NULL;
+  uint32_t parityLength = 0;
+  uint32_t parityOffset = 0;
+  uint32_t paritySize = 0;
+  napi_valuetype callback_type;
+  OK(napi_typeof(env, argv[9], &callback_type));
   if (
-    info.Length() != 10 ||
-    !node::Buffer::HasInstance(info[0]) ||
-    !info[1]->IsUint32() ||
-    !info[2]->IsUint32() ||
-    !node::Buffer::HasInstance(info[3]) ||
-    !info[4]->IsUint32() ||
-    !info[5]->IsUint32() ||
-    !node::Buffer::HasInstance(info[6]) ||
-    !info[7]->IsUint32() ||
-    !info[8]->IsUint32() ||
-    !info[9]->IsFunction()
+    argc != 10 ||
+    !arg_buf(env, argv[0], &context, &contextLength) ||
+    !arg_int(env, argv[1], &sources) ||
+    !arg_int(env, argv[2], &targets) ||
+    !arg_buf(env, argv[3], &buffer, &bufferLength) ||
+    !arg_int(env, argv[4], &bufferOffset) ||
+    !arg_int(env, argv[5], &bufferSize) ||
+    !arg_buf(env, argv[6], &parity, &parityLength) ||
+    !arg_int(env, argv[7], &parityOffset) ||
+    !arg_int(env, argv[8], &paritySize) ||
+    callback_type != napi_function
   ) {
-    return Nan::ThrowError(
+    THROW(
+      env,
       "bad arguments, expected: (Buffer context, int sources, int targets, "
       "Buffer buffer, int bufferOffset, int bufferSize, "
       "Buffer parity, int parityOffset, int paritySize, function end)"
     );
   }
-  v8::Local<v8::Object> contextHandle = info[0].As<v8::Object>();
-  const uint32_t contextSize = (uint32_t) node::Buffer::Length(contextHandle);
-  if (contextSize < 3) return Nan::ThrowError("context.length < 3");
-  const uint8_t* context = (uint8_t*) node::Buffer::Data(contextHandle);
+  assert(context != NULL);
+  assert(buffer != NULL);
+  assert(parity != NULL);
+  if (contextLength < 3) THROW(env, "context.length < 3");
   int w = (int) context[0];
   int k = (int) context[1];
   int m = (int) context[2];
-  if (w != 2 && w != 4 && w != 8) return Nan::ThrowError("w != 2, 4, 8");
-  if (k < 1) return Nan::ThrowError("k < 1");
-  if (k > MAX_K) return Nan::ThrowError("k > MAX_K");
-  if (m < 1) return Nan::ThrowError("m < 1");
-  if (m > MAX_M) return Nan::ThrowError("m > MAX_M");
-  if (k + m > (1 << w)) return Nan::ThrowError("k + m > (1 << w)");
-  if (contextSize != (uint32_t)(3 + k * w * m * w)) {
-    return Nan::ThrowError("context.length is bad");
+  if (w != 2 && w != 4 && w != 8) THROW(env, "w != 2, 4, 8");
+  if (k < 1) THROW(env, "k < 1");
+  if (k > MAX_K) THROW(env, "k > MAX_K");
+  if (m < 1) THROW(env, "m < 1");
+  if (m > MAX_M) THROW(env, "m > MAX_M");
+  if (k + m > (1 << w)) THROW(env, "k + m > (1 << w)");
+  if (contextLength != (uint32_t) (3 + k * w * m * w)) {
+    THROW(env, "context.length is bad");
   }
   if (bitmatrix_m0_optimized(w, k, context + 3) != 1) {
-    return Nan::ThrowError("bitmatrix not optimized");
+    THROW(env, "bitmatrix not optimized");
   }
-  const uint32_t sources = info[1]->Uint32Value();
-  if (sources >= (uint32_t)(1 << (k + m))) {
-    return Nan::ThrowError("sources > k + m");
-  }
+  assert(k + m < 31);
+  if (sources >= (uint32_t) 1 << (k + m)) THROW(env, "sources > k + m");
   const int sourcesCount = flags_count(sources);
-  if (sourcesCount == 0) return Nan::ThrowError("sources == 0");
-  if (sourcesCount < k) return Nan::ThrowError("sources < k");
-  const uint32_t targets = info[2]->Uint32Value();
-  if (targets >= (uint32_t)(1 << (k + m))) {
-    return Nan::ThrowError("targets > k + m");
-  }
+  if (sourcesCount == 0) THROW(env, "sources == 0");
+  if (sourcesCount < k) THROW(env, "sources < k");
+  assert(k + m < 31);
+  if (targets >= (uint32_t) 1 << (k + m)) THROW(env, "targets > k + m");
   const int targetsCount = flags_count(targets);
-  if (targetsCount == 0) return Nan::ThrowError("targets == 0");
-  if (targetsCount > m) return Nan::ThrowError("targets > m");
-  if ((sources & targets) != 0) {
-    return Nan::ThrowError("(sources & targets) != 0");
+  if (targetsCount == 0) THROW(env, "targets == 0");
+  if (targetsCount > m) THROW(env, "targets > m");
+  if ((sources & targets) != 0) THROW(env, "(sources & targets) != 0");
+  if (bufferSize == 0) THROW(env, "bufferSize == 0");
+  if ((uint64_t) bufferOffset + bufferSize > bufferLength) {
+    THROW(env, "bufferOffset + bufferSize > buffer.length");
   }
-  v8::Local<v8::Object> bufferHandle = info[3].As<v8::Object>();
-  const uint32_t bufferOffset = info[4]->Uint32Value();
-  const uint32_t bufferSize = info[5]->Uint32Value();
-  if (bufferSize == 0) return Nan::ThrowError("bufferSize == 0");
-  if (bufferOffset + bufferSize > node::Buffer::Length(bufferHandle)) {
-    return Nan::ThrowError("bufferOffset + bufferSize > buffer.length");
-  }
-  if (bufferSize % k != 0) return Nan::ThrowError("bufferSize % k != 0");
+  if (bufferSize % k != 0) THROW(env, "bufferSize % k != 0");
   const uint32_t shardSize = bufferSize / k;
-  if (shardSize % w != 0) return Nan::ThrowError("shardSize % w != 0");
-  if (shardSize % 8 != 0) return Nan::ThrowError("shardSize % 8 != 0");
-  v8::Local<v8::Object> parityHandle = info[6].As<v8::Object>();
-  const uint32_t parityOffset = info[7]->Uint32Value();
-  const uint32_t paritySize = info[8]->Uint32Value();
-  if (paritySize == 0) return Nan::ThrowError("paritySize == 0");
-  if (paritySize % m != 0) return Nan::ThrowError("paritySize % m != 0");
+  assert(shardSize != 0);
+  if (shardSize % w != 0) THROW(env, "shardSize % w != 0");
+  if (shardSize % 8 != 0) THROW(env, "shardSize % 8 != 0");
+  if (paritySize == 0) THROW(env, "paritySize == 0");
+  if (paritySize % m != 0) THROW(env, "paritySize % m != 0");
   if (paritySize / m != shardSize) {
-    return Nan::ThrowError("paritySize / m != bufferSize / k");
+    THROW(env, "paritySize / m != bufferSize / k");
   }
-  if (parityOffset + paritySize > node::Buffer::Length(parityHandle)) {
-    return Nan::ThrowError("parityOffset + paritySize > parity.length");
+  if ((uint64_t) parityOffset + paritySize > parityLength) {
+    THROW(env, "parityOffset + paritySize > parity.length");
   }
-  Nan::AsyncQueueWorker(new EncodeWorker(
-    contextHandle,
-    contextSize,
-    sources,
-    targets,
-    bufferHandle,
-    bufferOffset,
-    bufferSize,
-    parityHandle,
-    parityOffset,
-    paritySize,
-    shardSize,
-    new Nan::Callback(info[9].As<v8::Function>())
+  struct task_data* task = calloc(1, sizeof(struct task_data));
+  if (!task) THROW(env, "insufficient memory");
+  task->context = context;
+  task->contextSize = contextLength;
+  task->sources = sources;
+  task->targets = targets;
+  task->buffer = buffer + bufferOffset;
+  task->bufferSize = bufferSize;
+  task->parity = parity + parityOffset;
+  task->paritySize = paritySize;
+  task->shardSize = shardSize;
+  OK(napi_create_reference(env, argv[0], 1, &task->ref_context));
+  OK(napi_create_reference(env, argv[3], 1, &task->ref_buffer));
+  OK(napi_create_reference(env, argv[6], 1, &task->ref_parity));
+  OK(napi_create_reference(env, argv[9], 1, &task->ref_callback));
+  napi_value name;
+  OK(napi_create_string_utf8(env, RESOURCE_NAME, NAPI_AUTO_LENGTH, &name));
+  OK(napi_create_async_work(
+    env,
+    NULL,
+    name,
+    task_execute,
+    task_complete,
+    task,
+    &task->async_work
   ));
+  OK(napi_queue_async_work(env, task->async_work));
+  return NULL;
 }
 
-NAN_METHOD(search) {
-  if (info.Length() != 0) return Nan::ThrowError("expected no arguments");
+static napi_value search(napi_env env, napi_callback_info info) {
+  size_t argc = 0;
+  OK(napi_get_cb_info(env, info, &argc, NULL, NULL, NULL));
+  if (argc != 0) THROW(env, "expected no arguments");
   const int kl = 24;
-  const int ks[kl] = {
+  const int ks[] = {
      1,  2,  3,  4,  5,  6,  7,  8,  9, 10,
     11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     21, 22, 23, 24
   };
   const int ml = 6;
-  const int ms[ml] = { 1, 2, 3, 4, 5, 6 };
+  const int ms[] = { 1, 2, 3, 4, 5, 6 };
   const int wl = 3;
-  const int ws[wl] = { 2, 4, 8 };
+  const int ws[] = { 2, 4, 8 };
   const int pl2 = 1;
-  const int ps2[pl2] = { 7 };
+  const int ps2[] = { 7 };
   const int pl4 = 1;
-  const int ps4[pl4] = { 19 };
+  const int ps4[] = { 19 };
   const int pl8 = 16;
-  const int ps8[pl8] = {
+  const int ps8[] = {
      29,  43,  45,  77,  95,  99, 101, 105,
     113, 135, 141, 169, 195, 207, 231, 245
   };
-  const int pl[wl] = { pl2, pl4, pl8 };
-  const int* ps[wl] = { ps2, ps4, ps8 };
-  int z_max = 1 << ws[wl - 1];
-  int log[z_max];
-  int exp[z_max];
-  int bit[z_max];
-  int min[z_max];
-  uint8_t matrix[z_max * z_max];
+  const int pl[] = { pl2, pl4, pl8 };
+  const int* ps[] = { ps2, ps4, ps8 };
+  int log[256];
+  int exp[256];
+  int bit[256];
+  int min[256];
+  uint8_t matrix[65536];
   printf("static const int PARAMETERS[%i][%i][7] = {\n", kl, ml);
   for (int ki = 0; ki < kl; ki++) {
     int k = ks[ki];
@@ -1035,6 +1196,7 @@ NAN_METHOD(search) {
       int minY = -1;
       for (int wi = 0; wi < wl; wi++) {
         int w = ws[wi];
+        assert(w <= MAX_W);
         assert(w == 2 || w == 4 || w == 8);
         if (k + m > (1 << w)) continue;
         for (int pi = 0; pi < pl[wi]; pi++) {
@@ -1081,55 +1243,69 @@ NAN_METHOD(search) {
     printf(ki < kl - 1 ? "  },\n" : "  }\n");
   }
   printf("};\n");
+  return NULL;
 }
 
-NAN_METHOD(XOR) {
+static napi_value XOR(napi_env env, napi_callback_info info) {
+  size_t argc = 5;
+  napi_value argv[5];
+  OK(napi_get_cb_info(env, info, &argc, argv, NULL, NULL));
+  uint8_t* source = NULL;
+  uint32_t sourceLength = 0;
+  uint32_t sourceOffset = 0;
+  uint8_t* target = NULL;
+  uint32_t targetLength = 0;
+  uint32_t targetOffset = 0;
+  uint32_t size = 0;
   if (
-    info.Length() != 5 ||
-    !node::Buffer::HasInstance(info[0]) ||
-    !info[1]->IsUint32() ||
-    !node::Buffer::HasInstance(info[2]) ||
-    !info[3]->IsUint32() ||
-    !info[4]->IsUint32()
+    argc != 5 ||
+    !arg_buf(env, argv[0], &source, &sourceLength) ||
+    !arg_int(env, argv[1], &sourceOffset) ||
+    !arg_buf(env, argv[2], &target, &targetLength) ||
+    !arg_int(env, argv[3], &targetOffset) ||
+    !arg_int(env, argv[4], &size)
   ) {
-    return Nan::ThrowError(
+    THROW(
+      env,
       "bad arguments, expected: ("
       "Buffer source, int sourceOffset, "
       "Buffer target, int targetOffset, int size)"
     );
   }
-  v8::Local<v8::Object> sourceHandle = info[0].As<v8::Object>();
-  uint32_t sourceOffset = info[1]->Uint32Value();
-  v8::Local<v8::Object> targetHandle = info[2].As<v8::Object>();
-  uint32_t targetOffset = info[3]->Uint32Value();
-  uint32_t size = info[4]->Uint32Value();
-  if (sourceOffset + size > node::Buffer::Length(sourceHandle)) {
-    return Nan::ThrowError("sourceOffset + size > source.length");
+  assert(source != NULL);
+  assert(target != NULL);
+  if ((uint64_t) sourceOffset + size > sourceLength) {
+    THROW(env, "sourceOffset + size > source.length");
   }
-  if (targetOffset + size > node::Buffer::Length(targetHandle)) {
-    return Nan::ThrowError("targetOffset + size > target.length");
+  if ((uint64_t) targetOffset + size > targetLength) {
+    THROW(env, "targetOffset + size > target.length");
   }
-  uint8_t* source = (uint8_t*) node::Buffer::Data(sourceHandle);
-  uint8_t* target = (uint8_t*) node::Buffer::Data(targetHandle);
-  if (size == 0) return;
-  dot_xor(source + sourceOffset, target + targetOffset, size);
+  if (size > 0) dot_xor(source + sourceOffset, target + targetOffset, size);
+  return NULL;
 }
 
-NAN_MODULE_INIT(Init) {
+static napi_value Init(napi_env env, napi_value exports) {
+  // We require assert() for safety (our asserts are not side-effect free):
+  #ifdef NDEBUG
+    fprintf(stderr, "NDEBUG compile flag not supported\n");
+    abort();
+  #endif
+  // We require ints to be at least 31 bits to prevent overflow issues:
+  assert(INT_MAX >= 2147483647);
   // Keep `sources` and `targets` flags from exceeding 31 bits:
   // This side-steps issues with JavaScript signed/unsigned bitwise operations.
   assert(MAX_K + MAX_M < 31);
-  assert(sizeof(char*) == sizeof(uint8_t*)); // Assumed when casting buffers.
   assert(sizeof(uint64_t) == 8); // Assumed by unaligned64().
   assert(sizeof(PARAMETERS) == MAX_K * MAX_M * 7 * sizeof(int));
-  NODE_DEFINE_CONSTANT(target, MAX_K);
-  NODE_DEFINE_CONSTANT(target, MAX_M);
-  NAN_EXPORT(target, create); // Create an encoding context.
-  NAN_EXPORT(target, encode); // Encode buffer or parity shards.
-  NAN_EXPORT(target, search); // Search for optimal matrix parameters.
-  NAN_EXPORT(target, XOR);
+  set_int(env, exports, "MAX_K", MAX_K);
+  set_int(env, exports, "MAX_M", MAX_M);
+  set_method(env, exports, "create", create); // Create an encoding context.
+  set_method(env, exports, "encode", encode); // Encode buffer or parity shards.
+  set_method(env, exports, "search", search); // Search for optimal parameters.
+  set_method(env, exports, "XOR", XOR);
+  return exports;
 }
 
-NODE_MODULE(binding, Init)
+NAPI_MODULE(NODE_GYP_MODULE_NAME, Init)
 
 // S.D.G.
