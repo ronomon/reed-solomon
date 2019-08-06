@@ -1,6 +1,6 @@
 {
   "name": "@ronomon/reed-solomon",
-  "version": "5.0.3",
+  "version": "6.0.0",
   "description": "Fast, reliable Reed-Solomon erasure coding as a native addon for Node.js",
   "main": "binding.node",
   "files": [
